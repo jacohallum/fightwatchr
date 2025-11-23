@@ -98,6 +98,7 @@ model Fighter {
   // Fighting Info
   stance         Stance?        // ORTHODOX, SOUTHPAW, SWITCH
   fightingStyle  String?        // "Striker", "Wrestler", "BJJ", "Balanced"
+  weightClass    WeightClass?
   
   // Career Stats
   wins           Int            @default(0)
@@ -130,6 +131,7 @@ model Fighter {
   
   @@index([organizationId])
   @@index([lastName, firstName])
+  @@unique([organizationId, firstName, lastName])
 }
 
 model Event {
@@ -160,6 +162,7 @@ model Event {
   
   @@index([organizationId])
   @@index([date])
+  @@unique([organizationId, name])
 }
 
 model Fight {
@@ -206,6 +209,7 @@ model Fight {
   @@index([eventId])
   @@index([fighter1Id])
   @@index([fighter2Id])
+  @@unique([eventId, fighter1Id, fighter2Id])
 }
 
 model Ranking {

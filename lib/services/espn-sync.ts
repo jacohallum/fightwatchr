@@ -1,0 +1,379 @@
+import { prisma } from '@/lib/prisma'
+import { WeightClass } from '@prisma/client'
+
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+interface SyncResult {
+  success: boolean
+  eventsProcessed: number
+  fightsProcessed: number
+  fightersProcessed: number
+  error?: string
+}
+
+function detectWeightClass(competition: any, eventName: string): WeightClass | null {
+  // Check competition notes for weight class
+  if (competition.notes) {
+    for (const note of competition.notes) {
+      const text = note.headline?.toLowerCase() || ''
+      if (text.includes('strawweight')) return WeightClass.STRAWWEIGHT
+      if (text.includes('flyweight')) return WeightClass.FLYWEIGHT
+      if (text.includes('bantamweight')) return WeightClass.BANTAMWEIGHT
+      if (text.includes('featherweight')) return WeightClass.FEATHERWEIGHT
+      if (text.includes('lightweight')) return WeightClass.LIGHTWEIGHT
+      if (text.includes('welterweight')) return WeightClass.WELTERWEIGHT
+      if (text.includes('middleweight')) return WeightClass.MIDDLEWEIGHT
+      if (text.includes('light heavyweight')) return WeightClass.LIGHT_HEAVYWEIGHT
+      if (text.includes('heavyweight')) return WeightClass.HEAVYWEIGHT
+      if (text.includes('catchweight')) return WeightClass.CATCHWEIGHT
+    }
+  }
+  
+  // Check event name
+  const eventLower = eventName.toLowerCase()
+  if (eventLower.includes('strawweight')) return WeightClass.STRAWWEIGHT
+  if (eventLower.includes('flyweight')) return WeightClass.FLYWEIGHT
+  if (eventLower.includes('bantamweight')) return WeightClass.BANTAMWEIGHT
+  if (eventLower.includes('featherweight')) return WeightClass.FEATHERWEIGHT
+  if (eventLower.includes('lightweight')) return WeightClass.LIGHTWEIGHT
+  if (eventLower.includes('welterweight')) return WeightClass.WELTERWEIGHT
+  if (eventLower.includes('middleweight')) return WeightClass.MIDDLEWEIGHT
+  if (eventLower.includes('light heavyweight')) return WeightClass.LIGHT_HEAVYWEIGHT
+  if (eventLower.includes('heavyweight')) return WeightClass.HEAVYWEIGHT
+  if (eventLower.includes('catchweight')) return WeightClass.CATCHWEIGHT
+  
+  return null // Return null if we can't detect it
+}
+
+export async function syncESPNData(): Promise<SyncResult> {
+  try {
+    console.log('🚀 Starting comprehensive UFC data sync...')
+    console.log('📋 Will update all existing data with latest information\n')
+    
+    const stats = {
+      eventsProcessed: 0,
+      fightsProcessed: 0,
+      fightersProcessed: 0,
+      fightsSkipped: 0,
+      errors: 0
+    }
+
+    // Ensure UFC organization exists
+    const ufc = await prisma.organization.upsert({
+      where: { name: 'Ultimate Fighting Championship' },
+      update: {},
+      create: {
+        name: 'Ultimate Fighting Championship',
+        shortName: 'UFC',
+        website: 'https://www.ufc.com',
+        active: true
+      }
+    })
+
+    // Get events from last 10 years
+    const currentYear = new Date().getFullYear()
+    const startYear = currentYear - 10
+    const allEventIds: string[] = []
+
+    console.log(`📅 Fetching events from ${startYear} to ${currentYear}...`)
+
+    // Fetch events for each year
+    for (let year = startYear; year <= currentYear; year++) {
+      try {
+        await delay(200)
+        
+        const response = await fetch(
+          `https://site.api.espn.com/apis/site/v2/sports/mma/ufc/scoreboard?dates=${year}0101-${year}1231`
+        )
+        
+        if (!response.ok) continue
+        
+        const data = await response.json()
+        
+        if (data.events) {
+          for (const event of data.events) {
+            if (event.id) {
+              allEventIds.push(event.id)
+            }
+          }
+        }
+        
+        console.log(`  ✅ Year ${year}: ${data.events?.length || 0} events`)
+      } catch (err) {
+        console.warn(`  ⚠️ Failed to fetch ${year}`)
+      }
+    }
+
+    console.log(`\n📊 Total events found: ${allEventIds.length}`)
+    console.log(`⚡ Processing events in batches...\n`)
+
+    // Process events in batches of 10
+    for (let i = 0; i < allEventIds.length; i += 10) {
+      const batch = allEventIds.slice(i, i + 10)
+      
+      console.log(`📦 Batch ${Math.floor(i/10) + 1}/${Math.ceil(allEventIds.length/10)}`)
+      
+      for (const eventId of batch) {
+        try {
+          await delay(150)
+          
+          const eventResponse = await fetch(
+            `https://sports.core.api.espn.com/v2/sports/mma/leagues/ufc/events/${eventId}?lang=en&region=us`
+          )
+          
+          if (!eventResponse.ok) continue
+          
+          const eventData = await eventResponse.json()
+          
+          if (!eventData.name || !eventData.competitions) continue
+          
+          // Create/update event
+          const event = await prisma.event.upsert({
+            where: {
+              organizationId_name: {
+                organizationId: ufc.id,
+                name: eventData.name
+              }
+            },
+            update: {
+              date: new Date(eventData.date),
+              venue: eventData.venue?.fullName || 'TBA',
+              city: eventData.venue?.address?.city || 'TBA',
+              country: 'USA'
+            },
+            create: {
+              name: eventData.name,
+              eventType: eventData.name.match(/UFC \d+/) ? 'PPV' : 'FIGHT_NIGHT',
+              date: new Date(eventData.date),
+              venue: eventData.venue?.fullName || 'TBA',
+              city: eventData.venue?.address?.city || 'TBA',
+              country: 'USA',
+              organizationId: ufc.id
+            }
+          })
+          stats.eventsProcessed++
+          
+          // Process fights
+          for (const comp of eventData.competitions) {
+            if (!comp.competitors || comp.competitors.length !== 2) continue
+            
+            const fighters = []
+            
+            // Process both fighters
+            for (const competitor of comp.competitors) {
+              try {
+                await delay(100)
+                
+                const athleteResponse = await fetch(competitor.athlete.$ref + '?lang=en&region=us')
+                
+                if (!athleteResponse.ok) continue
+                
+                const athleteData = await athleteResponse.json()
+                
+                // Parse physical stats
+                const heightCm = athleteData.height ? Math.round(athleteData.height * 2.54) : null
+                const reachCm = athleteData.reach ? Math.round(athleteData.reach * 2.54) : null
+                const weightLbs = athleteData.weight || null
+                const dateOfBirth = athleteData.dateOfBirth ? new Date(athleteData.dateOfBirth) : null
+                
+                // Parse stance
+                let stance: 'ORTHODOX' | 'SOUTHPAW' | 'SWITCH' | null = null
+                if (athleteData.stance) {
+                  const stanceUpper = athleteData.stance.toUpperCase()
+                  if (['ORTHODOX', 'SOUTHPAW', 'SWITCH'].includes(stanceUpper)) {
+                    stance = stanceUpper as 'ORTHODOX' | 'SOUTHPAW' | 'SWITCH'
+                  }
+                }
+                
+                // Fetch detailed record with breakdown
+                let wins = 0, losses = 0, draws = 0, noContests = 0
+                let winsByKO = 0, winsBySub = 0, winsByDec = 0
+                
+                try {
+                  await delay(100)
+                  const recordResponse = await fetch(
+                    `https://sports.core.api.espn.com/v2/sports/mma/athletes/${athleteData.id}/records?lang=en&region=us`
+                  )
+                  
+                  if (recordResponse.ok) {
+                    const recordData = await recordResponse.json()
+                    
+                    const overallRecord = recordData.items?.find((r: any) => 
+                      r.name === 'overall' || r.type === 'total'
+                    )
+                    
+                    if (overallRecord?.summary) {
+                      const parts = overallRecord.summary.split('-')
+                      wins = parseInt(parts[0]) || 0
+                      losses = parseInt(parts[1]) || 0
+                      draws = parseInt(parts[2]) || 0
+                      if (parts[3]) noContests = parseInt(parts[3]) || 0
+                    }
+                    
+                    const koRecord = recordData.items?.find((r: any) => 
+                      r.name === 'KO/TKO' || r.displayName?.includes('KO')
+                    )
+                    const subRecord = recordData.items?.find((r: any) => 
+                      r.name === 'Submissions' || r.displayName?.includes('Sub')
+                    )
+                    const decRecord = recordData.items?.find((r: any) => 
+                      r.name === 'Decisions' || r.displayName?.includes('Dec')
+                    )
+                    
+                    if (koRecord?.wins) winsByKO = koRecord.wins
+                    if (subRecord?.wins) winsBySub = subRecord.wins
+                    if (decRecord?.wins) winsByDec = decRecord.wins
+                  }
+                } catch (err) {
+                  // Silent fail on record fetch
+                }
+                
+                const fighter = await prisma.fighter.upsert({
+                  where: {
+                    organizationId_firstName_lastName: {
+                      organizationId: ufc.id,
+                      firstName: athleteData.firstName || 'Unknown',
+                      lastName: athleteData.lastName || 'Fighter'
+                    }
+                  },
+                  update: {
+                    nickname: athleteData.nickname || null,
+                    imageUrl: athleteData.headshot?.href || null,
+                    nationality: athleteData.citizenship || null,
+                    dateOfBirth,
+                    height: heightCm,
+                    reach: reachCm,
+                    weight: weightLbs,
+                    stance,
+                    wins,
+                    losses,
+                    draws,
+                    noContests,
+                    winsByKO,
+                    winsBySub,
+                    winsByDec
+                  },
+                  create: {
+                    firstName: athleteData.firstName || 'Unknown',
+                    lastName: athleteData.lastName || 'Fighter',
+                    nickname: athleteData.nickname || null,
+                    imageUrl: athleteData.headshot?.href || null,
+                    nationality: athleteData.citizenship || null,
+                    dateOfBirth,
+                    height: heightCm,
+                    reach: reachCm,
+                    weight: weightLbs,
+                    stance,
+                    organizationId: ufc.id,
+                    wins,
+                    losses,
+                    draws,
+                    noContests,
+                    winsByKO,
+                    winsBySub,
+                    winsByDec
+                  }
+                })
+                
+                fighters.push(fighter)
+                stats.fightersProcessed++
+                
+              } catch (err) {
+                stats.errors++
+              }
+            }
+            
+            if (fighters.length === 2) {
+              const detectedWeightClass = detectWeightClass(comp, eventData.name)
+              
+              // Skip fight if we can't detect weight class
+              if (!detectedWeightClass) {
+                console.log(`    ⚠️ Skipping fight - no weight class detected`)
+                stats.fightsSkipped++
+                continue
+              }
+              
+              const statusState = comp.status?.type?.state?.toLowerCase() || 'pre'
+              let fightStatus: 'SCHEDULED' | 'COMPLETED' | 'CANCELLED' = 'SCHEDULED'
+              if (statusState === 'post') fightStatus = 'COMPLETED'
+              else if (statusState === 'cancelled') fightStatus = 'CANCELLED'
+              
+              // Create/update fight with detected weight class
+              await prisma.fight.upsert({
+                where: {
+                  eventId_fighter1Id_fighter2Id: {
+                    eventId: event.id,
+                    fighter1Id: fighters[0].id,
+                    fighter2Id: fighters[1].id
+                  }
+                },
+                update: {
+                  status: fightStatus,
+                  weightClass: detectedWeightClass,
+                  winner: comp.competitors[0].winner ? fighters[0].id : 
+                        comp.competitors[1].winner ? fighters[1].id : null
+                },
+                create: {
+                  eventId: event.id,
+                  fighter1Id: fighters[0].id,
+                  fighter2Id: fighters[1].id,
+                  weightClass: detectedWeightClass,
+                  rounds: 3,
+                  cardPosition: stats.fightsProcessed + 1,
+                  status: fightStatus,
+                  winner: comp.competitors[0].winner ? fighters[0].id : 
+                        comp.competitors[1].winner ? fighters[1].id : null
+                }
+              })
+              stats.fightsProcessed++
+              
+              // Update fighter weight classes
+              if (detectedWeightClass !== WeightClass.CATCHWEIGHT) {
+                await prisma.fighter.updateMany({
+                  where: {
+                    id: { in: [fighters[0].id, fighters[1].id] }
+                  },
+                  data: {
+                    weightClass: detectedWeightClass
+                  }
+                })
+              }
+            }
+          }
+          
+          console.log(`  ✅ ${eventData.name}`)
+          
+        } catch (err) {
+          console.error(`  ❌ Error processing event ${eventId}:`, err)
+          stats.errors++
+        }
+      }
+      
+      console.log(`   📊 Progress: ${stats.eventsProcessed} events, ${stats.fightsProcessed} fights, ${stats.fightsSkipped} skipped\n`)
+    }
+
+    console.log(`\n🎉 Sync complete!`)
+    console.log(`   Events: ${stats.eventsProcessed}`)
+    console.log(`   Fights: ${stats.fightsProcessed}`)
+    console.log(`   Fighters: ${stats.fightersProcessed}`)
+    console.log(`   Fights Skipped (no weight class): ${stats.fightsSkipped}`)
+    console.log(`   Errors: ${stats.errors}`)
+
+    return {
+      success: true,
+      eventsProcessed: stats.eventsProcessed,
+      fightsProcessed: stats.fightsProcessed,
+      fightersProcessed: stats.fightersProcessed
+    }
+
+  } catch (error) {
+    console.error('ESPN sync error:', error)
+    return { 
+      success: false, 
+      error: String(error),
+      eventsProcessed: 0,
+      fightsProcessed: 0,
+      fightersProcessed: 0
+    }
+  }
+}

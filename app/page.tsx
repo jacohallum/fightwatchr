@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { signIn, getSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 
@@ -10,24 +10,52 @@ export default function Home() {
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [tickerItems, setTickerItems] = useState<any[]>([])
+  const [showDebug, setShowDebug] = useState(false)
 
-  // Mock live scores for today (June 25, 2025)
-  const liveScores = [
-    { sport: 'NBA', game: 'Lakers 108 - Warriors 112', status: 'FINAL' },
-    { sport: 'MLB', game: 'Yankees 7 - Red Sox 4', status: 'TOP 9th' },
-    { sport: 'UFC', game: 'Main Event: Jones vs. Aspinall', status: 'LIVE' },
-    { sport: 'NFL', game: 'Chiefs 24 - Bills 21', status: 'Q4 2:15' },
-    { sport: 'Boxing', game: 'Canelo vs. Benavidez', status: 'Rd 8' },
-    { sport: 'NBA', game: 'Celtics 95 - Heat 89', status: 'FINAL' },
-    { sport: 'MLB', game: 'Dodgers 5 - Giants 3', status: 'BOT 7th' },
-    { sport: 'UFC', game: 'Co-Main: Oliveira vs. Chandler', status: 'Next' }
-  ]
+  // Fetch real fight data
+  useEffect(() => {
+    const fetchFights = () => {
+      fetch('/api/ticker/fights')
+        .then(res => {
+          console.log('📡 Response status:', res.status, res.statusText)
+          return res.json()
+        })
+        .then(data => {
+          console.log('📊 Received ticker data:', data)
+          console.log(`   Total fights: ${data.items?.length || 0}`)
+          
+          if (data.items && data.items.length > 0) {
+            console.log('✅ Setting ticker items:', data.items.length)
+            setTickerItems(data.items)
+          } else {
+            console.log('⚠️ No items in data.items')
+            setTickerItems([
+              { org: 'UFC', fighter1: 'No', fighter2: 'Fights', status: 'YET', isCompleted: false }
+            ])
+          }
+        })
+        .catch((err) => {
+          console.error('❌ Error fetching fights:', err)
+          setTickerItems([
+            { org: 'UFC', fighter1: 'Error', fighter2: 'Loading', status: 'RETRY', isCompleted: false }
+          ])
+        })
+    }
 
-  // Build ticker text
-  const tickerText = liveScores
-    .map(s => `${s.sport}: ${s.game} (${s.status})`)
-    .join(' • ')
+    fetchFights()
+    const interval = setInterval(fetchFights, 15 * 60 * 1000)
+    return () => clearInterval(interval)
+  }, [])
 
+  // Build ticker text - repeat items multiple times for continuous flow
+  const tickerText = tickerItems.length > 0
+    ? Array(6).fill(tickerItems)
+        .flat()
+        .map(item => `${item.org}: ${item.fighter1} vs ${item.fighter2} (${item.status})`)
+        .join(' • ')
+    : 'FightWatchr • Your MMA Command Center • Track Fights • Get Alerts • Never Miss An Event'
+  
   const handleCredentialsAuth = async () => {
     if (!email || !password) {
       setError('Please fill in all fields')

@@ -3,6 +3,12 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import Providers from "@/components/SessionProvider";
+import { startSyncScheduler } from '@/lib/services/sync-scheduler'
+
+// Start scheduler on server startup (dev only)
+if (typeof window === 'undefined') {
+  startSyncScheduler()
+}
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
