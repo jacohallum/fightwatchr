@@ -1,6 +1,4 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
+// prisma/schema.prisma
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,17 +8,28 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// NextAuth Models
 model User {
-  id            String         @id @default(cuid())
-  email         String         @unique
+  id            String    @id @default(cuid())
+  email         String    @unique
   password      String
-  preferences   Json?          // Add this field for sports/teams preferences
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-  watchlist     Watchlist[]
-  accounts      Account[]
-  sessions      Session[]
-  notifications Notification[]
+  name          String?
+  image         String?
+  emailVerified DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // MMA-specific relationships
+  followedFighters      Fighter[]      @relation("UserFollowedFighters")
+  followedOrganizations Organization[] @relation("UserFollowedOrgs")
+  watchlist             Watchlist[]
+  predictions           Prediction[]
+  notifications         Notification[]
+  preferences           UserPreferences?
+
+  // NextAuth
+  accounts Account[]
+  sessions Session[]
 }
 
 model Account {
@@ -47,142 +56,309 @@ model Session {
   sessionToken String   @unique
   userId       String
   expires      DateTime
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
-model VerificationToken {
-  identifier String
-  token      String   @unique
-  expires    DateTime
-
-  @@unique([identifier, token])
-}
-
-model Watchlist {
-  id        String   @id @default(cuid())
-  userId    String
-  fighterId String?
-  eventId   String?
-  type      String
-  createdAt DateTime @default(now())
-
-  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  fighter Fighter? @relation(fields: [fighterId], references: [id], onDelete: Cascade)
-  event   Event?   @relation(fields: [eventId], references: [id], onDelete: Cascade)
-}
-
-model Notification {
-  id        String   @id @default(cuid())
-  userId    String
-  type      String
-  content   String
-  metadata  Json?
-  sent      Boolean  @default(false)
-  createdAt DateTime @default(now())
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-}
-
-model Event {
-  id        String    @id @default(cuid())
-  name      String    @unique
-  date      DateTime?
-  location  String?
-  isKnown   Boolean   @default(true)
-  isPast    Boolean   @default(false)
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-
-  fights             Fight[]
-  unnannouncedFights UnnannouncedFight[]
-  fightLogs          FightLog[]
-  watchlists         Watchlist[]
-
-  @@map("events")
+// MMA Domain Models
+model Organization {
+  id          String    @id @default(cuid())
+  name        String    @unique // "UFC", "Bellator", "ONE Championship", "PFL"
+  shortName   String    // "UFC", "BELL", "ONE", "PFL"
+  logo        String?
+  website     String?
+  active      Boolean   @default(true)
+  
+  events      Event[]
+  fighters    Fighter[]
+  rankings    Ranking[]
+  followers   User[]    @relation("UserFollowedOrgs")
+  
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 }
 
 model Fighter {
-  id          String   @id @default(cuid())
-  name        String   @unique
-  nickname    String?
-  weightClass String?
-  record      String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id             String         @id @default(cuid())
+  firstName      String
+  lastName       String
+  nickname       String?
+  imageUrl       String?
+  dateOfBirth    DateTime?
+  nationality    String?
+  hometown       String?
+  fightingOutOf  String?
+  team           String?        // "American Top Team", "City Kickboxing", etc.
+  
+  // Physical Attributes
+  height         Int?           // in centimeters
+  reach          Int?           // in centimeters
+  legReach       Int?           // in centimeters
+  weight         Int?           // current weight in pounds
+  
+  // Fighting Info
+  stance         Stance?        // ORTHODOX, SOUTHPAW, SWITCH
+  fightingStyle  String?        // "Striker", "Wrestler", "BJJ", "Balanced"
+  
+  // Career Stats
+  wins           Int            @default(0)
+  losses         Int            @default(0)
+  draws          Int            @default(0)
+  noContests     Int            @default(0)
+  
+  // Detailed Win Stats
+  winsByKO       Int            @default(0)
+  winsBySub      Int            @default(0)
+  winsByDec      Int            @default(0)
+  
+  // Status
+  active         Boolean        @default(true)
+  retired        Boolean        @default(false)
+  suspended      Boolean        @default(false)
+  
+  // Relationships
+  organization   Organization   @relation(fields: [organizationId], references: [id])
+  organizationId String
+  
+  fightsAsFighter1 Fight[]      @relation("Fighter1")
+  fightsAsFighter2 Fight[]      @relation("Fighter2")
+  rankings       Ranking[]
+  followers      User[]         @relation("UserFollowedFighters")
+  predictions    Prediction[]
+  
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  
+  @@index([organizationId])
+  @@index([lastName, firstName])
+}
 
-  fightAthletes FightAthlete[]
-  watchlists    Watchlist[]
-
-  @@map("fighters")
+model Event {
+  id             String         @id @default(cuid())
+  name           String         // "UFC 300", "UFC Fight Night: Allen vs Curtis"
+  eventNumber    Int?           // 300 for "UFC 300", null for Fight Nights
+  eventType      EventType      // PPV, FIGHT_NIGHT, APEX, etc.
+  date           DateTime
+  venue          String
+  city           String
+  state          String?
+  country        String
+  
+  // Event Details
+  mainCardStart  DateTime?
+  prelimsStart   DateTime?
+  earlyPrelimsStart DateTime?
+  
+  // Relationships
+  organization   Organization   @relation(fields: [organizationId], references: [id])
+  organizationId String
+  
+  fights         Fight[]
+  watchlists     Watchlist[]
+  
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  
+  @@index([organizationId])
+  @@index([date])
 }
 
 model Fight {
-  id            String   @id @default(cuid())
-  name          String
-  eventId       String
-  weightClass   String?
-  isMainEvent   Boolean  @default(false)
-  isCoMainEvent Boolean  @default(false)
-  isTitleFight  Boolean  @default(false)
-  isUnannounced Boolean  @default(false)
-  isKnown       Boolean  @default(true)
-  status        String?
-  result        String?
-  method        String?
-  round         Int?
-  time          String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  event             Event              @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  athletes          FightAthlete[]
-  unnannouncedFight UnnannouncedFight?
-  fightLogs         FightLog[]
-
-  @@map("fights")
+  id             String         @id @default(cuid())
+  event          Event          @relation(fields: [eventId], references: [id])
+  eventId        String
+  
+  fighter1       Fighter        @relation("Fighter1", fields: [fighter1Id], references: [id])
+  fighter1Id     String
+  fighter2       Fighter        @relation("Fighter2", fields: [fighter2Id], references: [id])
+  fighter2Id     String
+  
+  // Fight Details
+  weightClass    WeightClass
+  rounds         Int            @default(3) // 3 or 5
+  isMainEvent    Boolean        @default(false)
+  isCoMainEvent  Boolean        @default(false)
+  isTitleFight   Boolean        @default(false)
+  isInterimTitle Boolean        @default(false)
+  isEliminatorFight Boolean     @default(false)
+  cardPosition   Int            // Order on the card (1 = main event, 2 = co-main, etc.)
+  
+  // Betting Odds (if available)
+  fighter1Odds   Int?           // +150, -200, etc.
+  fighter2Odds   Int?
+  
+  // Results
+  status         FightStatus    @default(SCHEDULED) // SCHEDULED, COMPLETED, CANCELLED
+  winner         String?        // fighter1Id or fighter2Id
+  method         FinishMethod?  // KO, TKO, SUBMISSION, DECISION, etc.
+  methodDetails  String?        // "Rear Naked Choke", "Unanimous", "Split", etc.
+  roundEnded     Int?
+  timeEnded      String?        // "2:34"
+  
+  // Stats (post-fight)
+  fightStats     Json?          // Detailed striking, grappling stats
+  
+  // Relationships
+  predictions    Prediction[]
+  
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  
+  @@index([eventId])
+  @@index([fighter1Id])
+  @@index([fighter2Id])
 }
 
-model FightAthlete {
-  id        String   @id @default(cuid())
-  fightId   String
-  fighterId String
-  corner    String
-  isWinner  Boolean?
-  createdAt DateTime @default(now())
-
-  fight   Fight   @relation(fields: [fightId], references: [id], onDelete: Cascade)
-  fighter Fighter @relation(fields: [fighterId], references: [id], onDelete: Cascade)
-
-  @@unique([fightId, fighterId])
-  @@map("fight_athletes")
+model Ranking {
+  id             String         @id @default(cuid())
+  fighter        Fighter        @relation(fields: [fighterId], references: [id])
+  fighterId      String
+  organization   Organization   @relation(fields: [organizationId], references: [id])
+  organizationId String
+  
+  weightClass    WeightClass
+  rank           Int            // 0 = Champion, 1-15 = Contenders
+  poundForPound  Int?           // P4P ranking if applicable
+  
+  effectiveDate  DateTime       @default(now())
+  active         Boolean        @default(true)
+  
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  
+  @@unique([fighterId, organizationId, weightClass, active])
+  @@index([organizationId, weightClass])
 }
 
-model UnnannouncedFight {
-  id           String   @id @default(cuid())
-  eventId      String
-  fightId      String   @unique
-  announcement String?
-  createdAt    DateTime @default(now())
-
-  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  fight Fight @relation(fields: [fightId], references: [id], onDelete: Cascade)
-
-  @@map("unnannounced_fights")
+model Watchlist {
+  id        String    @id @default(cuid())
+  user      User      @relation(fields: [userId], references: [id])
+  userId    String
+  event     Event     @relation(fields: [eventId], references: [id])
+  eventId   String
+  
+  createdAt DateTime  @default(now())
+  
+  @@unique([userId, eventId])
 }
 
-model FightLog {
-  id        String   @id @default(cuid())
-  fightId   String?
-  eventId   String?
-  fightName String
-  eventName String
-  action    String
-  details   Json?
-  timestamp DateTime @default(now())
+model Prediction {
+  id         String    @id @default(cuid())
+  user       User      @relation(fields: [userId], references: [id])
+  userId     String
+  fight      Fight     @relation(fields: [fightId], references: [id])
+  fightId    String
+  
+  winner     Fighter   @relation(fields: [winnerId], references: [id])
+  winnerId   String
+  method     FinishMethod?
+  round      Int?
+  confidence Int?      // 1-5 confidence level
+  notes      String?
+  
+  correct    Boolean?  // null until fight completes
+  points     Int?      // points earned if prediction system active
+  
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  
+  @@unique([userId, fightId])
+}
 
-  fight Fight? @relation(fields: [fightId], references: [id], onDelete: SetNull)
-  event Event? @relation(fields: [eventId], references: [id], onDelete: SetNull)
+model Notification {
+  id        String           @id @default(cuid())
+  user      User             @relation(fields: [userId], references: [id])
+  userId    String
+  
+  type      NotificationType
+  title     String
+  message   String
+  data      Json?            // Additional context (fighterId, eventId, etc.)
+  
+  read      Boolean          @default(false)
+  sent      Boolean          @default(false)
+  
+  createdAt DateTime         @default(now())
+  
+  @@index([userId, read])
+}
 
-  @@map("fight_logs")
+model UserPreferences {
+  id                    String    @id @default(cuid())
+  user                  User      @relation(fields: [userId], references: [id])
+  userId                String    @unique
+  
+  // Notification Preferences
+  emailNotifications    Boolean   @default(true)
+  fightAlerts          Boolean   @default(true)
+  resultAlerts         Boolean   @default(true)
+  rankingUpdates       Boolean   @default(true)
+  
+  // Display Preferences
+  favoriteWeightClasses WeightClass[]
+  defaultOrganization   String    @default("UFC")
+  spoilerMode          Boolean   @default(false) // Hide results
+  oddsDisplay          Boolean   @default(true)
+  
+  // Timezone
+  timezone             String    @default("America/New_York")
+  
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+}
+
+// Enums
+enum Stance {
+  ORTHODOX
+  SOUTHPAW
+  SWITCH
+}
+
+enum WeightClass {
+  STRAWWEIGHT      // Women's 115 lbs
+  FLYWEIGHT        // 125 lbs (Men's and Women's)
+  BANTAMWEIGHT     // 135 lbs (Men's and Women's)
+  FEATHERWEIGHT    // 145 lbs (Men's and Women's)
+  LIGHTWEIGHT      // 155 lbs
+  WELTERWEIGHT     // 170 lbs
+  MIDDLEWEIGHT     // 185 lbs
+  LIGHT_HEAVYWEIGHT // 205 lbs
+  HEAVYWEIGHT      // 265 lbs
+  SUPER_HEAVYWEIGHT // 265+ lbs (mainly for other orgs)
+  CATCHWEIGHT      // Custom weight
+}
+
+enum EventType {
+  PPV              // Pay-Per-View numbered events
+  FIGHT_NIGHT      // ESPN Fight Nights
+  APEX             // UFC Apex events
+  TOURNAMENT       // Tournament style (PFL, Bellator)
+  GRAND_PRIX      // Special tournament events
+  CHAMPIONSHIP     // Title-focused events
+}
+
+enum FightStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+  POSTPONED
+  NO_CONTEST
+}
+
+enum FinishMethod {
+  KO               // Knockout
+  TKO              // Technical Knockout
+  SUBMISSION       // Submission
+  DECISION         // Decision (Unanimous, Split, Majority)
+  DRAW            // Draw
+  DQ              // Disqualification
+  NO_CONTEST      // No Contest
+}
+
+enum NotificationType {
+  FIGHT_ANNOUNCEMENT
+  FIGHT_RESULT
+  EVENT_REMINDER
+  RANKING_UPDATE
+  FIGHTER_NEWS
+  PREDICTION_RESULT
 }

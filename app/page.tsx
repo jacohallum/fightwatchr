@@ -271,7 +271,7 @@ export default function Home() {
 
         {/* Section 3: App Features */}
         <div className="text-center text-gray-400 text-sm space-y-1">
-          <p>🥊 Track your favorite teams</p>
+          <p>🥊 Track your favorite fighters</p>
           <p>📅 Never miss an event</p>
           <p>🔔 Get personalized notifications</p>
         </div>
