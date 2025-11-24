@@ -4,21 +4,21 @@ import { useSession, signOut } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 
 const MENS_DIVISIONS = [
-  { id: 'FLYWEIGHT', name: 'Flyweight', weight: '125 lbs' },
-  { id: 'BANTAMWEIGHT', name: 'Bantamweight', weight: '135 lbs' },
-  { id: 'FEATHERWEIGHT', name: 'Featherweight', weight: '145 lbs' },
-  { id: 'LIGHTWEIGHT', name: 'Lightweight', weight: '155 lbs' },
-  { id: 'WELTERWEIGHT', name: 'Welterweight', weight: '170 lbs' },
-  { id: 'MIDDLEWEIGHT', name: 'Middleweight', weight: '185 lbs' },
-  { id: 'LIGHT_HEAVYWEIGHT', name: 'Light Heavyweight', weight: '205 lbs' },
-  { id: 'HEAVYWEIGHT', name: 'Heavyweight', weight: '265 lbs' }
+  { id: 'FLYWEIGHT', name: 'Flyweight', weight: '125 lbs', minWeight: 116, maxWeight: 125 },
+  { id: 'BANTAMWEIGHT', name: 'Bantamweight', weight: '135 lbs', minWeight: 126, maxWeight: 135 },
+  { id: 'FEATHERWEIGHT', name: 'Featherweight', weight: '145 lbs', minWeight: 136, maxWeight: 145 },
+  { id: 'LIGHTWEIGHT', name: 'Lightweight', weight: '155 lbs', minWeight: 146, maxWeight: 155 },
+  { id: 'WELTERWEIGHT', name: 'Welterweight', weight: '170 lbs', minWeight: 156, maxWeight: 170 },
+  { id: 'MIDDLEWEIGHT', name: 'Middleweight', weight: '185 lbs', minWeight: 171, maxWeight: 185 },
+  { id: 'LIGHT_HEAVYWEIGHT', name: 'Light Heavyweight', weight: '205 lbs', minWeight: 186, maxWeight: 205 },
+  { id: 'HEAVYWEIGHT', name: 'Heavyweight', weight: '265 lbs', minWeight: 206, maxWeight: 265 }
 ]
 
 const WOMENS_DIVISIONS = [
-  { id: 'STRAWWEIGHT', name: 'Strawweight', weight: '115 lbs' },
-  { id: 'FLYWEIGHT', name: 'Flyweight', weight: '125 lbs' },
-  { id: 'BANTAMWEIGHT', name: 'Bantamweight', weight: '135 lbs' },
-  { id: 'FEATHERWEIGHT', name: 'Featherweight', weight: '145 lbs' }
+  { id: 'STRAWWEIGHT', name: 'Strawweight', weight: '115 lbs', minWeight: 106, maxWeight: 115 },
+  { id: 'FLYWEIGHT', name: 'Flyweight', weight: '125 lbs', minWeight: 116, maxWeight: 125 },
+  { id: 'BANTAMWEIGHT', name: 'Bantamweight', weight: '135 lbs', minWeight: 126, maxWeight: 135 },
+  //{ id: 'FEATHERWEIGHT', name: 'Featherweight', weight: '145 lbs', minWeight: 136, maxWeight: 145 } // currently does not exist as a division
 ]
 
 interface Fighter {
@@ -31,6 +31,8 @@ interface Fighter {
   losses: number
   draws: number
   totalFights: number
+  currentRank: number | null
+  isChampion: boolean
 }
 
 export default function Dashboard() {
@@ -44,6 +46,7 @@ export default function Dashboard() {
   const [loadingDivision, setLoadingDivision] = useState<string | null>(null)
   const [savingPreferences, setSavingPreferences] = useState(false)
   const [loadingPreferences, setLoadingPreferences] = useState(true)
+  const [searchQuery, setSearchQuery] = useState('')
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -81,47 +84,69 @@ export default function Dashboard() {
   }
 
   const loadDivisionFighters = async (divisionId: string, gender?: 'mens' | 'womens') => {
-    const currentGender = gender ?? genderTab // Use passed gender or fall back to state
-    const cacheKey = `${currentGender}-${divisionId}`
+  const currentGender = gender ?? genderTab
+  const cacheKey = `${currentGender}-${divisionId}`
+  
+  if (divisionFighters[cacheKey]) return
+
+  setLoadingDivision(divisionId)
+  try {
+    const currentDivisions = currentGender === 'mens' ? MENS_DIVISIONS : WOMENS_DIVISIONS
+    const division = currentDivisions.find(d => d.id === divisionId)
     
-    if (divisionFighters[cacheKey]) return
+    if (!division) return
 
-    setLoadingDivision(divisionId)
-    try {
-      const response = await fetch(`/api/fighters?weightClass=${divisionId}&gender=${currentGender}&limit=100`)
+    const response = await fetch(
+      `/api/fighters?weightClass=${divisionId}&minWeight=${division.minWeight}&maxWeight=${division.maxWeight}&gender=${currentGender === 'mens' ? 'MALE' : 'FEMALE'}&limit=100`
+    )
+    
+    if (response.ok) {
+      const data = await response.json()
+      const fighters = data.fighters || []
       
-      if (response.ok) {
-        const data = await response.json()
-        const fighters = data.fighters || []
+      // Debug logging
+      console.log(`📊 ${divisionId} (${currentGender}): Loaded ${fighters.length} fighters`);
+      const ranked = fighters.filter((f: Fighter) => f.currentRank !== null);
+      console.log(`   Ranked: ${ranked.length}, Champions: ${ranked.filter((f: Fighter) => f.isChampion).length}`);
+      console.log(`   Top 5:`, ranked.slice(0, 5).map((f: Fighter) => 
+        `${f.firstName} ${f.lastName} (#${f.currentRank})`
+      ));
+      
+      const sortedFighters = fighters.sort((a: Fighter, b: Fighter) => {
+        // Sort by official ranking first (champions first, then by rank number)
+        if (a.currentRank !== null && b.currentRank !== null) {
+          return a.currentRank - b.currentRank
+        }
+        if (a.currentRank !== null) return -1
+        if (b.currentRank !== null) return 1
         
-        const sortedFighters = fighters.sort((a: Fighter, b: Fighter) => {
-          const aWinRate = a.totalFights > 0 ? a.wins / a.totalFights : 0
-          const bWinRate = b.totalFights > 0 ? b.wins / b.totalFights : 0
-          return bWinRate - aWinRate
-        })
-        
-        setDivisionFighters(prev => ({
-          ...prev,
-          [cacheKey]: sortedFighters.slice(0, 50)
-        }))
+        // Unranked fighters: sort by win rate
+        const aWinRate = a.totalFights > 0 ? a.wins / a.totalFights : 0
+        const bWinRate = b.totalFights > 0 ? b.wins / b.totalFights : 0
+        return bWinRate - aWinRate
+      })
+      
+      setDivisionFighters(prev => ({
+        ...prev,
+        [cacheKey]: sortedFighters.slice(0, 50)
+      }))
 
-        // Prefetch next division
-        const currentDivisions = currentGender === 'mens' ? MENS_DIVISIONS : WOMENS_DIVISIONS
-        const currentIndex = currentDivisions.findIndex(d => d.id === divisionId)
-        if (currentIndex >= 0 && currentIndex < currentDivisions.length - 1) {
-          const nextDivisionId = currentDivisions[currentIndex + 1].id
-          const nextCacheKey = `${currentGender}-${nextDivisionId}`
-          if (!divisionFighters[nextCacheKey]) {
-            setTimeout(() => loadDivisionFighters(nextDivisionId, currentGender), 100)
-          }
+      // Prefetch next division
+      const currentIndex = currentDivisions.findIndex(d => d.id === divisionId)
+      if (currentIndex >= 0 && currentIndex < currentDivisions.length - 1) {
+        const nextDivisionId = currentDivisions[currentIndex + 1].id
+        const nextCacheKey = `${currentGender}-${nextDivisionId}`
+        if (!divisionFighters[nextCacheKey]) {
+          setTimeout(() => loadDivisionFighters(nextDivisionId, currentGender), 100)
         }
       }
-    } catch (error) {
-      console.error('Error loading division fighters:', error)
-    } finally {
-      setLoadingDivision(null)
     }
+  } catch (error) {
+    console.error('Error loading division fighters:', error)
+  } finally {
+    setLoadingDivision(null)
   }
+}
   
   const handleGenderTabChange = (gender: 'mens' | 'womens') => {
     setGenderTab(gender)
@@ -203,7 +228,15 @@ export default function Dashboard() {
   }
 
   const currentDivisions = genderTab === 'mens' ? MENS_DIVISIONS : WOMENS_DIVISIONS
-  const currentFighters = divisionFighters[`${genderTab}-${activeDivision}`] || []
+  const allFighters = divisionFighters[`${genderTab}-${activeDivision}`] || []
+  const currentFighters = searchQuery.trim() 
+    ? allFighters.filter(fighter => {
+        const search = searchQuery.toLowerCase()
+        const fullName = `${fighter.firstName} ${fighter.lastName}`.toLowerCase()
+        const nickname = fighter.nickname?.toLowerCase() || ''
+        return fullName.includes(search) || nickname.includes(search)
+      })
+    : allFighters
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-black">
       {/* Header */}
@@ -264,12 +297,25 @@ export default function Dashboard() {
           <div className="bg-gray-800 rounded-2xl shadow-2xl max-w-6xl w-full max-h-[90vh] overflow-y-auto">
             {/* Modal Header */}
             <div className="p-6 border-b border-gray-700">
-              <h2 className="text-2xl font-bold text-white">
-                Select Your Favorite Fighters
-              </h2>
-              <p className="text-gray-400 mt-1">
-                {selectedFighters.length} fighter{selectedFighters.length !== 1 ? 's' : ''} selected
-              </p>
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-2xl font-bold text-white">
+                    Select Your Favorite Fighters
+                  </h2>
+                  <p className="text-gray-400 mt-1">
+                    {selectedFighters.length} fighter{selectedFighters.length !== 1 ? 's' : ''} selected
+                  </p>
+                </div>
+                <div className="flex-1 max-w-md">
+                  <input
+                    type="text"
+                    placeholder="Search fighters..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full px-4 py-2 bg-gray-700 text-white rounded-lg border border-gray-600 focus:border-red-500 focus:outline-none"
+                  />
+                </div>
+              </div>
             </div>
 
             {/* Gender Tabs */}
@@ -343,13 +389,12 @@ export default function Dashboard() {
                         }`}
                       >
                         {/* Ranking Badge */}
-                        <div className={`absolute top-2 right-2 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
-                          index === 0 ? 'bg-yellow-500 text-black' :
-                          index === 1 ? 'bg-gray-400 text-black' :
-                          index === 2 ? 'bg-orange-600 text-white' :
+                        <div className={`absolute top-2 right-2 px-2 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
+                          fighter.isChampion ? 'bg-yellow-500 text-black' :
+                          fighter.currentRank !== null ? 'bg-blue-500 text-white' :
                           'bg-gray-600 text-white'
                         }`}>
-                          {index + 1}
+                          {fighter.isChampion ? 'C' : fighter.currentRank !== null ? `#${fighter.currentRank}` : 'NR'}
                         </div>
                         
                         <div className="pr-8">
@@ -370,7 +415,7 @@ export default function Dashboard() {
                 </div>
               ) : (
                 <div className="text-center text-gray-400 py-12">
-                  No fighters available in this division
+                  {searchQuery.trim() ? 'No fighters found matching your search' : 'No fighters available in this division'}
                 </div>
               )}
             </div>

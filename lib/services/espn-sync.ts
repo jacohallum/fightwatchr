@@ -1,3 +1,4 @@
+// lib\services\espn-sync.ts
 import { prisma } from '@/lib/prisma'
 import { WeightClass } from '@prisma/client'
 import { error } from 'node:console'
@@ -123,9 +124,9 @@ export async function syncESPNData(): Promise<SyncResult> {
       }
     })
 
-    // Get events from last 15 years
+    // Get events from last 30 years
     const currentYear = new Date().getFullYear()
-    const startYear = currentYear - 15
+    const startYear = currentYear - 30
     const allEventIds: string[] = []
 
     console.log(`📅 Fetching events from ${startYear} to ${currentYear}...`)
@@ -158,20 +159,6 @@ export async function syncESPNData(): Promise<SyncResult> {
     }
 
     console.log(`\n📊 Total events found: ${allEventIds.length}`)
-
-    // Check which events already exist in database
-    const existingEvents = await prisma.event.findMany({
-      where: {
-        organizationId: ufc.id
-      },
-      select: {
-        name: true
-      }
-    })
-
-    const existingEventNames = new Set(existingEvents.map(e => e.name))
-
-    console.log(`📋 Existing events in database: ${existingEventNames.size}`)
     console.log(`⚡ Processing events in batches...\n`)
 
     // Process events in batches of 10
@@ -194,50 +181,53 @@ export async function syncESPNData(): Promise<SyncResult> {
 
           if (!eventData.name || !eventData.competitions) continue
 
-          // Skip if event already exists with fights
-          if (existingEventNames.has(eventData.name)) {
-            const fightCount = await prisma.fight.count({
+          // Create/update event
+          let event
+          try {
+            event = await prisma.event.upsert({
               where: {
-                event: {
-                  name: eventData.name,
-                  organizationId: ufc.id
-                }
-              }
+                espnId: eventData.id
+              },
+              update: {
+                name: eventData.name,
+                date: new Date(eventData.date),
+                venue: eventData.venue?.fullName || 'TBA',
+                city: eventData.venue?.address?.city || 'TBA',
+                country: 'USA',
+                espnUid: eventData.uid
+              },
+              create: {
+                espnId: eventData.id,
+                espnUid: eventData.uid,
+                name: eventData.name,
+                eventType: eventData.name.match(/UFC \d+/) ? 'PPV' : 'FIGHT_NIGHT',
+                date: new Date(eventData.date),
+                venue: eventData.venue?.fullName || 'TBA',
+                city: eventData.venue?.address?.city || 'TBA',
+                country: 'USA',
+                organizationId: ufc.id
+              },
             })
-            
-            if (fightCount > 0) {
-              console.log(`  ⏭️  Skipping existing event: ${eventData.name}`)
-              stats.eventsProcessed++
-              continue
+            stats.eventsProcessed++
+          } catch (err: any) {
+            if (err.code === 'P2002') {
+              // Duplicate event, fetch existing by name
+              event = await prisma.event.findFirst({
+                where: {
+                  organizationId: ufc.id,
+                  name: eventData.name
+                }
+              })
+              if (!event) {
+                console.log(`  ⚠️ Skipping duplicate event: ${eventData.name}`)
+                continue
+              }
+              console.log(`  ♻️  Using existing event: ${eventData.name}`)
+            } else {
+              throw err
             }
           }
 
-          // Create/update event
-          const event = await prisma.event.upsert({
-            where: {
-              organizationId_name: {
-                organizationId: ufc.id,
-                name: eventData.name
-              }
-            },
-            update: {
-              date: new Date(eventData.date),
-              venue: eventData.venue?.fullName || 'TBA',
-              city: eventData.venue?.address?.city || 'TBA',
-              country: 'USA'
-            },
-            create: {
-              name: eventData.name,
-              eventType: eventData.name.match(/UFC \d+/) ? 'PPV' : 'FIGHT_NIGHT',
-              date: new Date(eventData.date),
-              venue: eventData.venue?.fullName || 'TBA',
-              city: eventData.venue?.address?.city || 'TBA',
-              country: 'USA',
-              organizationId: ufc.id
-            }
-          })
-          stats.eventsProcessed++
-          
           // Process fights
           for (const comp of eventData.competitions) {
             if (!comp.competitors || comp.competitors.length !== 2) continue
@@ -268,7 +258,7 @@ export async function syncESPNData(): Promise<SyncResult> {
                   //console.log(`      ✅ Got: ${athleteData.firstName} ${athleteData.lastName}`)
                   
                   // Extract weight class from fighter
-                  const fighterWeightClass = athleteData.weightClass?.abbreviation || athleteData.weightClass?.name || null
+                  const fighterWeightClass = athleteData.weightClass?.text || athleteData.weightClass?.shortName || null
 
                   // Parse physical stats
                   const heightCm = athleteData.height ? Math.round(athleteData.height * 2.54) : null
@@ -288,6 +278,18 @@ export async function syncESPNData(): Promise<SyncResult> {
                       if (['ORTHODOX', 'SOUTHPAW', 'SWITCH'].includes(stanceUpper)) {
                         stance = stanceUpper as 'ORTHODOX' | 'SOUTHPAW' | 'SWITCH'
                       }
+                    }
+                  }
+
+                  // Parse gender
+                  let gender: 'MALE' | 'FEMALE' = 'MALE' // Default to MALE
+                  if (athleteData.gender) {
+                    const genderValue = typeof athleteData.gender === 'string'
+                      ? athleteData.gender
+                      : athleteData.gender.name || athleteData.gender.type
+                    
+                    if (genderValue) {
+                      gender = genderValue.toUpperCase() === 'FEMALE' ? 'FEMALE' : 'MALE'
                     }
                   }
                   
@@ -336,13 +338,11 @@ export async function syncESPNData(): Promise<SyncResult> {
                   
                   fighter = await prisma.fighter.upsert({
                     where: {
-                      organizationId_firstName_lastName: {
-                        organizationId: ufc.id,
-                        firstName: athleteData.firstName || 'Unknown',
-                        lastName: athleteData.lastName || 'Fighter'
-                      }
+                      espnId: athleteData.id
                     },
                     update: {
+                      firstName: athleteData.firstName || 'Unknown',
+                      lastName: athleteData.lastName || 'Fighter',
                       nickname: athleteData.nickname || null,
                       imageUrl: athleteData.headshot?.href || null,
                       nationality: athleteData.citizenship || null,
@@ -358,9 +358,13 @@ export async function syncESPNData(): Promise<SyncResult> {
                       winsByKO,
                       winsBySub,
                       winsByDec,
-                      weightClass: mapWeightClass(fighterWeightClass) // Add this
+                      weightClass: mapWeightClass(fighterWeightClass),
+                      gender,
+                      espnUid: athleteData.uid
                     },
                     create: {
+                      espnId: athleteData.id,
+                      espnUid: athleteData.uid,
                       firstName: athleteData.firstName || 'Unknown',
                       lastName: athleteData.lastName || 'Fighter',
                       nickname: athleteData.nickname || null,
@@ -379,7 +383,8 @@ export async function syncESPNData(): Promise<SyncResult> {
                       winsByKO,
                       winsBySub,
                       winsByDec,
-                      weightClass: mapWeightClass(fighterWeightClass) // Add this
+                      weightClass: mapWeightClass(fighterWeightClass),
+                      gender
                     }
                   })                  
                   // Cache the fighter
@@ -397,44 +402,63 @@ export async function syncESPNData(): Promise<SyncResult> {
             }
             
             if (fighters.length === 2) {
-              // Use fighter's weight class (they should match in same fight)
-              const detectedWeightClass = fighters[0].weightClass || 
-                          fighters[1].weightClass || 
-                          WeightClass.CATCHWEIGHT
+              // Try fighter weight class first, then fall back to competition/event detection
+              let detectedWeightClass = fighters[0].weightClass || fighters[1].weightClass
               
-              const statusState = comp.status?.type?.state?.toLowerCase() || 'pre'
+              // If no weight class from fighters, detect from competition/event
+              if (!detectedWeightClass) {
+                const eventDetected = detectWeightClass(comp, eventData.name)
+                detectedWeightClass = eventDetected || WeightClass.CATCHWEIGHT
+              }
+              
+              // Better status detection - check multiple ESPN fields
+              const statusState = comp.status?.type?.state?.toLowerCase() || 
+                                comp.status?.type?.name?.toLowerCase() || 
+                                'pre'
+              const isCompleted = statusState === 'post' || statusState === 'final' || 
+                                comp.status?.type?.completed === true ||
+                                eventData.date < new Date() // Past events should be completed
+
               let fightStatus: 'SCHEDULED' | 'COMPLETED' | 'CANCELLED' = 'SCHEDULED'
-              if (statusState === 'post') fightStatus = 'COMPLETED'
-              else if (statusState === 'cancelled') fightStatus = 'CANCELLED'
+              if (statusState.includes('cancel')) fightStatus = 'CANCELLED'
+              else if (isCompleted) fightStatus = 'COMPLETED'
               
               // Create/update fight with detected weight class
-              await prisma.fight.upsert({
-                where: {
-                  eventId_fighter1Id_fighter2Id: {
+              try {
+                await prisma.fight.upsert({
+                  where: {
+                    espnId: comp.id
+                  },
+                  update: {
+                    status: fightStatus,
+                    weightClass: detectedWeightClass,
+                    winner: comp.competitors[0].winner ? fighters[0].id : 
+                          comp.competitors[1].winner ? fighters[1].id : null,
+                    espnUid: comp.uid 
+                  },
+                  create: {
+                    espnId: comp.id,
+                    espnUid: comp.uid,
                     eventId: event.id,
                     fighter1Id: fighters[0].id,
-                    fighter2Id: fighters[1].id
+                    fighter2Id: fighters[1].id,
+                    weightClass: detectedWeightClass,
+                    rounds: 3,
+                    cardPosition: stats.fightsProcessed + 1,
+                    status: fightStatus,
+                    winner: comp.competitors[0].winner ? fighters[0].id : 
+                          comp.competitors[1].winner ? fighters[1].id : null
                   }
-                },
-                update: {
-                  status: fightStatus,
-                  weightClass: detectedWeightClass,
-                  winner: comp.competitors[0].winner ? fighters[0].id : 
-                        comp.competitors[1].winner ? fighters[1].id : null
-                },
-                create: {
-                  eventId: event.id,
-                  fighter1Id: fighters[0].id,
-                  fighter2Id: fighters[1].id,
-                  weightClass: detectedWeightClass,
-                  rounds: 3,
-                  cardPosition: stats.fightsProcessed + 1,
-                  status: fightStatus,
-                  winner: comp.competitors[0].winner ? fighters[0].id : 
-                        comp.competitors[1].winner ? fighters[1].id : null
+                })
+                stats.fightsProcessed++
+              } catch (err: any) {
+                if (err.code === 'P2002') {
+                  console.log(`    ⚠️ Skipping duplicate fight: ${fighters[0].lastName} vs ${fighters[1].lastName}`)
+                  stats.fightsSkipped++
+                } else {
+                  throw err
                 }
-              })
-              stats.fightsProcessed++
+              }
               
               // Update fighter weight classes
               if (detectedWeightClass !== WeightClass.CATCHWEIGHT) {

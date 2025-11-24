@@ -1,4 +1,3 @@
-//app\api\cron\sync\route.ts
 import { NextResponse } from 'next/server'
 import { headers } from 'next/headers'
 
@@ -11,8 +10,8 @@ export async function GET(request: Request) {
   }
 
   try {
-    // Call the incremental sync
-    const response = await fetch(`${process.env.NEXTAUTH_URL}/api/espn/sync-recent`, {
+    // Call the rankings sync
+    const response = await fetch(`${process.env.NEXTAUTH_URL}/api/espn/sync-rankings`, {
       method: 'POST'
     })
     

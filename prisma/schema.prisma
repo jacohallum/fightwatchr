@@ -99,6 +99,7 @@ model Fighter {
   stance         Stance?        // ORTHODOX, SOUTHPAW, SWITCH
   fightingStyle  String?        // "Striker", "Wrestler", "BJJ", "Balanced"
   weightClass    WeightClass?
+  gender         Gender         @default(MALE)
   
   // Career Stats
   wins           Int            @default(0)
@@ -125,6 +126,8 @@ model Fighter {
   rankings       Ranking[]
   followers      User[]         @relation("UserFollowedFighters")
   predictions    Prediction[]
+  espnId         String?        @unique  // ESPN athlete ID
+  espnUid        String?                 // ESPN UID
   
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
@@ -156,6 +159,9 @@ model Event {
   
   fights         Fight[]
   watchlists     Watchlist[]
+
+  espnId         String?        @unique  // ESPN event ID
+  espnUid        String?                 // ESPN UID
   
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
@@ -202,6 +208,9 @@ model Fight {
   
   // Relationships
   predictions    Prediction[]
+
+  espnId         String?        @unique  // ESPN event ID
+  espnUid        String?                 // ESPN UID
   
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
@@ -315,6 +324,11 @@ enum Stance {
   ORTHODOX
   SOUTHPAW
   SWITCH
+}
+
+enum Gender {
+  MALE
+  FEMALE
 }
 
 enum WeightClass {

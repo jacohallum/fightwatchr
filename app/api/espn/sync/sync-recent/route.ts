@@ -1,4 +1,4 @@
-//app\api\espn\sync\sync-recent\route.ts
+// app\api\espn\sync\sync-recent\route.ts
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { WeightClass } from '@prisma/client'
@@ -105,15 +105,16 @@ export async function POST() {
         
         const event = await prisma.event.upsert({
           where: {
-            organizationId_name: {
-              organizationId: ufc.id,
-              name: eventData.name
-            }
+            espnId: eventData.id
           },
           update: {
-            date: new Date(eventData.date)
+            name: eventData.name,
+            date: new Date(eventData.date),
+            espnUid: eventData.uid 
           },
           create: {
+            espnId: eventData.id,
+            espnUid: eventData.uid,
             name: eventData.name,
             eventType: eventData.name.match(/UFC \d+/) ? 'PPV' : 'FIGHT_NIGHT',
             date: new Date(eventData.date),
@@ -140,7 +141,7 @@ export async function POST() {
               const athleteData = await athleteResponse.json()
 
               // Extract weight class from fighter
-              const fighterWeightClass = athleteData.weightClass?.abbreviation || athleteData.weightClass?.name || null
+              const fighterWeightClass = athleteData.weightClass?.text || athleteData.weightClass?.shortName || null
 
               // Parse physical stats
               const heightCm = athleteData.height ? Math.round(athleteData.height * 2.54) : null
@@ -160,6 +161,18 @@ export async function POST() {
                   if (['ORTHODOX', 'SOUTHPAW', 'SWITCH'].includes(stanceUpper)) {
                     stance = stanceUpper as 'ORTHODOX' | 'SOUTHPAW' | 'SWITCH'
                   }
+                }
+              }
+
+              // Parse gender
+              let gender: 'MALE' | 'FEMALE' = 'MALE'
+              if (athleteData.gender) {
+                const genderValue = typeof athleteData.gender === 'string'
+                  ? athleteData.gender
+                  : athleteData.gender.name || athleteData.gender.type
+                
+                if (genderValue) {
+                  gender = genderValue.toUpperCase() === 'FEMALE' ? 'FEMALE' : 'MALE'
                 }
               }
 
@@ -208,13 +221,11 @@ export async function POST() {
 
               const fighter = await prisma.fighter.upsert({
                 where: {
-                  organizationId_firstName_lastName: {
-                    organizationId: ufc.id,
-                    firstName: athleteData.firstName || 'Unknown',
-                    lastName: athleteData.lastName || 'Fighter'
-                  }
+                  espnId: athleteData.id
                 },
                 update: {
+                  firstName: athleteData.firstName || 'Unknown',
+                  lastName: athleteData.lastName || 'Fighter',
                   nickname: athleteData.nickname || null,
                   imageUrl: athleteData.headshot?.href || null,
                   nationality: athleteData.citizenship || null,
@@ -230,9 +241,13 @@ export async function POST() {
                   winsByKO,
                   winsBySub,
                   winsByDec,
-                  weightClass: mapWeightClass(fighterWeightClass) // Add this
+                  weightClass: mapWeightClass(fighterWeightClass),
+                  gender,
+                  espnUid: athleteData.uid
                 },
                 create: {
+                  espnId: athleteData.id,
+                  espnUid: athleteData.uid,
                   firstName: athleteData.firstName || 'Unknown',
                   lastName: athleteData.lastName || 'Fighter',
                   nickname: athleteData.nickname || null,
@@ -251,7 +266,8 @@ export async function POST() {
                   winsByKO,
                   winsBySub,
                   winsByDec,
-                  weightClass: mapWeightClass(fighterWeightClass) // Add this
+                  weightClass: mapWeightClass(fighterWeightClass),
+                  gender
                 }
               })
 
@@ -274,19 +290,18 @@ export async function POST() {
             
             await prisma.fight.upsert({
               where: {
-                eventId_fighter1Id_fighter2Id: {
-                  eventId: event.id,
-                  fighter1Id: fighters[0].id,
-                  fighter2Id: fighters[1].id
-                }
+                espnId: comp.id
               },
               update: {
                 status: fightStatus,
                 weightClass: detectedWeightClass,
                 winner: comp.competitors[0].winner ? fighters[0].id : 
-                       comp.competitors[1].winner ? fighters[1].id : null
+                      comp.competitors[1].winner ? fighters[1].id : null,
+                espnUid: comp.uid
               },
               create: {
+                espnId: comp.id,
+                espnUid: comp.uid,
                 eventId: event.id,
                 fighter1Id: fighters[0].id,
                 fighter2Id: fighters[1].id,
@@ -295,7 +310,7 @@ export async function POST() {
                 cardPosition: stats.fights + 1,
                 status: fightStatus,
                 winner: comp.competitors[0].winner ? fighters[0].id : 
-                       comp.competitors[1].winner ? fighters[1].id : null
+                      comp.competitors[1].winner ? fighters[1].id : null
               }
             })
             stats.fights++
