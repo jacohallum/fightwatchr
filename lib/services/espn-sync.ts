@@ -158,6 +158,20 @@ export async function syncESPNData(): Promise<SyncResult> {
     }
 
     console.log(`\n📊 Total events found: ${allEventIds.length}`)
+
+    // Check which events already exist in database
+    const existingEvents = await prisma.event.findMany({
+      where: {
+        organizationId: ufc.id
+      },
+      select: {
+        name: true
+      }
+    })
+
+    const existingEventNames = new Set(existingEvents.map(e => e.name))
+
+    console.log(`📋 Existing events in database: ${existingEventNames.size}`)
     console.log(`⚡ Processing events in batches...\n`)
 
     // Process events in batches of 10
@@ -177,9 +191,27 @@ export async function syncESPNData(): Promise<SyncResult> {
           if (!eventResponse.ok) continue
           
           const eventData = await eventResponse.json()
-          
+
           if (!eventData.name || !eventData.competitions) continue
-          
+
+          // Skip if event already exists with fights
+          if (existingEventNames.has(eventData.name)) {
+            const fightCount = await prisma.fight.count({
+              where: {
+                event: {
+                  name: eventData.name,
+                  organizationId: ufc.id
+                }
+              }
+            })
+            
+            if (fightCount > 0) {
+              console.log(`  ⏭️  Skipping existing event: ${eventData.name}`)
+              stats.eventsProcessed++
+              continue
+            }
+          }
+
           // Create/update event
           const event = await prisma.event.upsert({
             where: {
