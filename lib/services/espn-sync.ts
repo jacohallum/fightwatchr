@@ -1,7 +1,40 @@
 import { prisma } from '@/lib/prisma'
 import { WeightClass } from '@prisma/client'
+import { error } from 'node:console'
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+// Cache fighters during sync to avoid redundant API calls
+const fighterCache = new Map<string, any>()
+
+async function fetchWithRetry(url: string, retries = 3): Promise<Response> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const response = await fetch(url)
+      
+      // Handle rate limiting with aggressive backoff
+      if (response.status === 429) {
+        const backoffTime = Math.min(2000 * Math.pow(2, i), 10000)
+        console.log(`      ⏳ Rate limited, waiting ${backoffTime}ms...`)
+        await delay(backoffTime)
+        continue // Retry this iteration
+      }
+      
+      if (response.ok) return response
+      
+      // For other errors, only retry if not the last attempt
+      if (i < retries - 1) {
+        await delay(1000 * (i + 1))
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err)
+      console.log(`      ❌ Network error on attempt ${i + 1}:`, errorMsg)
+      if (i === retries - 1) throw err
+      await delay(2000 * (i + 1))
+    }
+  }
+  throw new Error('Max retries reached')
+}
 
 interface SyncResult {
   success: boolean
@@ -44,6 +77,26 @@ function detectWeightClass(competition: any, eventName: string): WeightClass | n
   
   return null // Return null if we can't detect it
 }
+function mapWeightClass(espnWeightClass: string | null): WeightClass | null {
+  if (!espnWeightClass) return null
+  
+  const normalized = espnWeightClass.toUpperCase().replace(/[^A-Z]/g, '')
+  
+  const mapping: Record<string, WeightClass> = {
+    'STRAWWEIGHT': WeightClass.STRAWWEIGHT,
+    'FLYWEIGHT': WeightClass.FLYWEIGHT,
+    'BANTAMWEIGHT': WeightClass.BANTAMWEIGHT,
+    'FEATHERWEIGHT': WeightClass.FEATHERWEIGHT,
+    'LIGHTWEIGHT': WeightClass.LIGHTWEIGHT,
+    'WELTERWEIGHT': WeightClass.WELTERWEIGHT,
+    'MIDDLEWEIGHT': WeightClass.MIDDLEWEIGHT,
+    'LIGHTHEAVYWEIGHT': WeightClass.LIGHT_HEAVYWEIGHT,
+    'LHEAVYWEIGHT': WeightClass.LIGHT_HEAVYWEIGHT,
+    'HEAVYWEIGHT': WeightClass.HEAVYWEIGHT
+  }
+  
+  return mapping[normalized] || WeightClass.CATCHWEIGHT
+}
 
 export async function syncESPNData(): Promise<SyncResult> {
   try {
@@ -70,9 +123,9 @@ export async function syncESPNData(): Promise<SyncResult> {
       }
     })
 
-    // Get events from last 10 years
+    // Get events from last 15 years
     const currentYear = new Date().getFullYear()
-    const startYear = currentYear - 10
+    const startYear = currentYear - 15
     const allEventIds: string[] = []
 
     console.log(`📅 Fetching events from ${startYear} to ${currentYear}...`)
@@ -115,9 +168,9 @@ export async function syncESPNData(): Promise<SyncResult> {
       
       for (const eventId of batch) {
         try {
-          await delay(150)
-          
-          const eventResponse = await fetch(
+          await delay(500)
+
+          const eventResponse = await fetchWithRetry(
             `https://sports.core.api.espn.com/v2/sports/mma/leagues/ufc/events/${eventId}?lang=en&region=us`
           )
           
@@ -162,136 +215,160 @@ export async function syncESPNData(): Promise<SyncResult> {
             // Process both fighters
             for (const competitor of comp.competitors) {
               try {
-                await delay(100)
+                const athleteRef = competitor.athlete.$ref
+                //console.log(`      🔍 Fetching: ${athleteRef}`)
                 
-                const athleteResponse = await fetch(competitor.athlete.$ref + '?lang=en&region=us')
+                // Check cache first
+                let fighter = fighterCache.get(athleteRef)
                 
-                if (!athleteResponse.ok) continue
-                
-                const athleteData = await athleteResponse.json()
-                
-                // Parse physical stats
-                const heightCm = athleteData.height ? Math.round(athleteData.height * 2.54) : null
-                const reachCm = athleteData.reach ? Math.round(athleteData.reach * 2.54) : null
-                const weightLbs = athleteData.weight || null
-                const dateOfBirth = athleteData.dateOfBirth ? new Date(athleteData.dateOfBirth) : null
-                
-                // Parse stance
-                let stance: 'ORTHODOX' | 'SOUTHPAW' | 'SWITCH' | null = null
-                if (athleteData.stance) {
-                  const stanceUpper = athleteData.stance.toUpperCase()
-                  if (['ORTHODOX', 'SOUTHPAW', 'SWITCH'].includes(stanceUpper)) {
-                    stance = stanceUpper as 'ORTHODOX' | 'SOUTHPAW' | 'SWITCH'
-                  }
-                }
-                
-                // Fetch detailed record with breakdown
-                let wins = 0, losses = 0, draws = 0, noContests = 0
-                let winsByKO = 0, winsBySub = 0, winsByDec = 0
-                
-                try {
-                  await delay(100)
-                  const recordResponse = await fetch(
-                    `https://sports.core.api.espn.com/v2/sports/mma/athletes/${athleteData.id}/records?lang=en&region=us`
-                  )
+                if (!fighter) {
+                  await delay(500)
                   
-                  if (recordResponse.ok) {
-                    const recordData = await recordResponse.json()
-                    
-                    const overallRecord = recordData.items?.find((r: any) => 
-                      r.name === 'overall' || r.type === 'total'
-                    )
-                    
-                    if (overallRecord?.summary) {
-                      const parts = overallRecord.summary.split('-')
-                      wins = parseInt(parts[0]) || 0
-                      losses = parseInt(parts[1]) || 0
-                      draws = parseInt(parts[2]) || 0
-                      if (parts[3]) noContests = parseInt(parts[3]) || 0
-                    }
-                    
-                    const koRecord = recordData.items?.find((r: any) => 
-                      r.name === 'KO/TKO' || r.displayName?.includes('KO')
-                    )
-                    const subRecord = recordData.items?.find((r: any) => 
-                      r.name === 'Submissions' || r.displayName?.includes('Sub')
-                    )
-                    const decRecord = recordData.items?.find((r: any) => 
-                      r.name === 'Decisions' || r.displayName?.includes('Dec')
-                    )
-                    
-                    if (koRecord?.wins) winsByKO = koRecord.wins
-                    if (subRecord?.wins) winsBySub = subRecord.wins
-                    if (decRecord?.wins) winsByDec = decRecord.wins
+                  const athleteResponse = await fetchWithRetry(athleteRef + '?lang=en&region=us')
+                  //console.log(`      📡 Response status: ${athleteResponse.status}`)
+                  
+                  if (!athleteResponse.ok) {
+                    //console.log(`      ❌ Fighter fetch failed`)
+                    continue
                   }
-                } catch (err) {
-                  // Silent fail on record fetch
-                }
-                
-                const fighter = await prisma.fighter.upsert({
-                  where: {
-                    organizationId_firstName_lastName: {
-                      organizationId: ufc.id,
+                  
+                  const athleteData = await athleteResponse.json()
+                  //console.log(`      ✅ Got: ${athleteData.firstName} ${athleteData.lastName}`)
+                  
+                  // Extract weight class from fighter
+                  const fighterWeightClass = athleteData.weightClass?.abbreviation || athleteData.weightClass?.name || null
+
+                  // Parse physical stats
+                  const heightCm = athleteData.height ? Math.round(athleteData.height * 2.54) : null
+                  const reachCm = athleteData.reach ? Math.round(athleteData.reach * 2.54) : null
+                  const weightLbs = athleteData.weight || null
+                  const dateOfBirth = athleteData.dateOfBirth ? new Date(athleteData.dateOfBirth) : null
+                  
+                  // Parse stance
+                  let stance: 'ORTHODOX' | 'SOUTHPAW' | 'SWITCH' | null = null
+                  if (athleteData.stance) {
+                    const stanceValue = typeof athleteData.stance === 'string' 
+                      ? athleteData.stance 
+                      : athleteData.stance.name || athleteData.stance.displayName
+                    
+                    if (stanceValue) {
+                      const stanceUpper = stanceValue.toUpperCase()
+                      if (['ORTHODOX', 'SOUTHPAW', 'SWITCH'].includes(stanceUpper)) {
+                        stance = stanceUpper as 'ORTHODOX' | 'SOUTHPAW' | 'SWITCH'
+                      }
+                    }
+                  }
+                  
+                  // Fetch detailed record with breakdown
+                  let wins = 0, losses = 0, draws = 0, noContests = 0
+                  let winsByKO = 0, winsBySub = 0, winsByDec = 0
+                  
+                  try {
+                    await delay(500)
+                    const recordResponse = await fetchWithRetry(
+                      `https://sports.core.api.espn.com/v2/sports/mma/athletes/${athleteData.id}/records?lang=en&region=us`
+                    )
+                    
+                    if (recordResponse.ok) {
+                      const recordData = await recordResponse.json()
+                      
+                      const overallRecord = recordData.items?.find((r: any) => 
+                        r.name === 'overall' || r.type === 'total'
+                      )
+                      
+                      if (overallRecord?.summary) {
+                        const parts = overallRecord.summary.split('-')
+                        wins = parseInt(parts[0]) || 0
+                        losses = parseInt(parts[1]) || 0
+                        draws = parseInt(parts[2]) || 0
+                        if (parts[3]) noContests = parseInt(parts[3]) || 0
+                      }
+                      
+                      const koRecord = recordData.items?.find((r: any) => 
+                        r.name === 'KO/TKO' || r.displayName?.includes('KO')
+                      )
+                      const subRecord = recordData.items?.find((r: any) => 
+                        r.name === 'Submissions' || r.displayName?.includes('Sub')
+                      )
+                      const decRecord = recordData.items?.find((r: any) => 
+                        r.name === 'Decisions' || r.displayName?.includes('Dec')
+                      )
+                      
+                      if (koRecord?.wins) winsByKO = koRecord.wins
+                      if (subRecord?.wins) winsBySub = subRecord.wins
+                      if (decRecord?.wins) winsByDec = decRecord.wins
+                    }
+                  } catch (err) {
+                    // Silent fail on record fetch
+                  }
+                  
+                  fighter = await prisma.fighter.upsert({
+                    where: {
+                      organizationId_firstName_lastName: {
+                        organizationId: ufc.id,
+                        firstName: athleteData.firstName || 'Unknown',
+                        lastName: athleteData.lastName || 'Fighter'
+                      }
+                    },
+                    update: {
+                      nickname: athleteData.nickname || null,
+                      imageUrl: athleteData.headshot?.href || null,
+                      nationality: athleteData.citizenship || null,
+                      dateOfBirth,
+                      height: heightCm,
+                      reach: reachCm,
+                      weight: weightLbs,
+                      stance,
+                      wins,
+                      losses,
+                      draws,
+                      noContests,
+                      winsByKO,
+                      winsBySub,
+                      winsByDec,
+                      weightClass: mapWeightClass(fighterWeightClass) // Add this
+                    },
+                    create: {
                       firstName: athleteData.firstName || 'Unknown',
-                      lastName: athleteData.lastName || 'Fighter'
+                      lastName: athleteData.lastName || 'Fighter',
+                      nickname: athleteData.nickname || null,
+                      imageUrl: athleteData.headshot?.href || null,
+                      nationality: athleteData.citizenship || null,
+                      dateOfBirth,
+                      height: heightCm,
+                      reach: reachCm,
+                      weight: weightLbs,
+                      stance,
+                      organizationId: ufc.id,
+                      wins,
+                      losses,
+                      draws,
+                      noContests,
+                      winsByKO,
+                      winsBySub,
+                      winsByDec,
+                      weightClass: mapWeightClass(fighterWeightClass) // Add this
                     }
-                  },
-                  update: {
-                    nickname: athleteData.nickname || null,
-                    imageUrl: athleteData.headshot?.href || null,
-                    nationality: athleteData.citizenship || null,
-                    dateOfBirth,
-                    height: heightCm,
-                    reach: reachCm,
-                    weight: weightLbs,
-                    stance,
-                    wins,
-                    losses,
-                    draws,
-                    noContests,
-                    winsByKO,
-                    winsBySub,
-                    winsByDec
-                  },
-                  create: {
-                    firstName: athleteData.firstName || 'Unknown',
-                    lastName: athleteData.lastName || 'Fighter',
-                    nickname: athleteData.nickname || null,
-                    imageUrl: athleteData.headshot?.href || null,
-                    nationality: athleteData.citizenship || null,
-                    dateOfBirth,
-                    height: heightCm,
-                    reach: reachCm,
-                    weight: weightLbs,
-                    stance,
-                    organizationId: ufc.id,
-                    wins,
-                    losses,
-                    draws,
-                    noContests,
-                    winsByKO,
-                    winsBySub,
-                    winsByDec
-                  }
-                })
+                  })                  
+                  // Cache the fighter
+                  fighterCache.set(athleteRef, fighter)
+                  stats.fightersProcessed++
+                }
                 
                 fighters.push(fighter)
-                stats.fightersProcessed++
                 
               } catch (err) {
+                const errorMsg = err instanceof Error ? err.message : String(err)
+                console.error(`      ❌ Fighter error:`, errorMsg)
                 stats.errors++
               }
             }
             
             if (fighters.length === 2) {
-              const detectedWeightClass = detectWeightClass(comp, eventData.name)
-              
-              // Skip fight if we can't detect weight class
-              if (!detectedWeightClass) {
-                console.log(`    ⚠️ Skipping fight - no weight class detected`)
-                stats.fightsSkipped++
-                continue
-              }
+              // Use fighter's weight class (they should match in same fight)
+              const detectedWeightClass = fighters[0].weightClass || 
+                          fighters[1].weightClass || 
+                          WeightClass.CATCHWEIGHT
               
               const statusState = comp.status?.type?.state?.toLowerCase() || 'pre'
               let fightStatus: 'SCHEDULED' | 'COMPLETED' | 'CANCELLED' = 'SCHEDULED'
@@ -338,6 +415,9 @@ export async function syncESPNData(): Promise<SyncResult> {
                   }
                 })
               }
+            } else {
+              console.log(`    ⚠️ Skipping fight - only ${fighters.length}/2 fighters loaded`)
+              stats.fightsSkipped++
             }
           }
           
@@ -355,8 +435,9 @@ export async function syncESPNData(): Promise<SyncResult> {
     console.log(`\n🎉 Sync complete!`)
     console.log(`   Events: ${stats.eventsProcessed}`)
     console.log(`   Fights: ${stats.fightsProcessed}`)
-    console.log(`   Fighters: ${stats.fightersProcessed}`)
-    console.log(`   Fights Skipped (no weight class): ${stats.fightsSkipped}`)
+    console.log(`   Unique Fighters: ${fighterCache.size}`)
+    console.log(`   Total Fighter Fetches: ${stats.fightersProcessed}`)
+    console.log(`   Fights Skipped: ${stats.fightsSkipped}`)
     console.log(`   Errors: ${stats.errors}`)
 
     return {

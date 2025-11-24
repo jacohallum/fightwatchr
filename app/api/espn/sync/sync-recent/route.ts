@@ -37,6 +37,27 @@ function detectWeightClass(competition: any, eventName: string): WeightClass {
   return WeightClass.CATCHWEIGHT // Always return a valid WeightClass
 }
 
+function mapWeightClass(espnWeightClass: string | null): WeightClass | null {
+  if (!espnWeightClass) return null
+  
+  const normalized = espnWeightClass.toUpperCase().replace(/[^A-Z]/g, '')
+  
+  const mapping: Record<string, WeightClass> = {
+    'STRAWWEIGHT': WeightClass.STRAWWEIGHT,
+    'FLYWEIGHT': WeightClass.FLYWEIGHT,
+    'BANTAMWEIGHT': WeightClass.BANTAMWEIGHT,
+    'FEATHERWEIGHT': WeightClass.FEATHERWEIGHT,
+    'LIGHTWEIGHT': WeightClass.LIGHTWEIGHT,
+    'WELTERWEIGHT': WeightClass.WELTERWEIGHT,
+    'MIDDLEWEIGHT': WeightClass.MIDDLEWEIGHT,
+    'LIGHTHEAVYWEIGHT': WeightClass.LIGHT_HEAVYWEIGHT,
+    'LHEAVYWEIGHT': WeightClass.LIGHT_HEAVYWEIGHT,
+    'HEAVYWEIGHT': WeightClass.HEAVYWEIGHT
+  }
+  
+  return mapping[normalized] || WeightClass.CATCHWEIGHT
+}
+
 export async function POST() {
   try {
     console.log('⚡ Starting incremental sync...')
@@ -118,6 +139,9 @@ export async function POST() {
               
               const athleteData = await athleteResponse.json()
 
+              // Extract weight class from fighter
+              const fighterWeightClass = athleteData.weightClass?.abbreviation || athleteData.weightClass?.name || null
+
               // Parse physical stats
               const heightCm = athleteData.height ? Math.round(athleteData.height * 2.54) : null
               const reachCm = athleteData.reach ? Math.round(athleteData.reach * 2.54) : null
@@ -127,9 +151,15 @@ export async function POST() {
               // Parse stance
               let stance: 'ORTHODOX' | 'SOUTHPAW' | 'SWITCH' | null = null
               if (athleteData.stance) {
-                const stanceUpper = athleteData.stance.toUpperCase()
-                if (['ORTHODOX', 'SOUTHPAW', 'SWITCH'].includes(stanceUpper)) {
-                  stance = stanceUpper as 'ORTHODOX' | 'SOUTHPAW' | 'SWITCH'
+                const stanceValue = typeof athleteData.stance === 'string' 
+                  ? athleteData.stance 
+                  : athleteData.stance.name || athleteData.stance.displayName
+                
+                if (stanceValue) {
+                  const stanceUpper = stanceValue.toUpperCase()
+                  if (['ORTHODOX', 'SOUTHPAW', 'SWITCH'].includes(stanceUpper)) {
+                    stance = stanceUpper as 'ORTHODOX' | 'SOUTHPAW' | 'SWITCH'
+                  }
                 }
               }
 
@@ -199,7 +229,8 @@ export async function POST() {
                   noContests,
                   winsByKO,
                   winsBySub,
-                  winsByDec
+                  winsByDec,
+                  weightClass: mapWeightClass(fighterWeightClass) // Add this
                 },
                 create: {
                   firstName: athleteData.firstName || 'Unknown',
@@ -219,10 +250,11 @@ export async function POST() {
                   noContests,
                   winsByKO,
                   winsBySub,
-                  winsByDec
+                  winsByDec,
+                  weightClass: mapWeightClass(fighterWeightClass) // Add this
                 }
               })
-              
+
               fighters.push(fighter)
               stats.fighters++
             } catch (err) {
@@ -231,7 +263,9 @@ export async function POST() {
           }
           
           if (fighters.length === 2) {
-            const detectedWeightClass = detectWeightClass(comp, eventData.name)
+            const detectedWeightClass = fighters[0].weightClass || 
+                          fighters[1].weightClass || 
+                          WeightClass.CATCHWEIGHT
             
             const statusState = comp.status?.type?.state?.toLowerCase() || 'pre'
             let fightStatus: 'SCHEDULED' | 'COMPLETED' | 'CANCELLED' = 'SCHEDULED'
