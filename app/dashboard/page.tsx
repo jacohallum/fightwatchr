@@ -2,6 +2,8 @@
 import { useEffect, useState } from 'react'
 import { useSession, signOut } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
+import Image from 'next/image'
+import ThemeToggle from '@/components/ThemeToggle'
 
 const MENS_DIVISIONS = [
   { id: 'FLYWEIGHT', name: 'Flyweight', weight: '125 lbs', minWeight: 116, maxWeight: 125 },
@@ -33,6 +35,7 @@ interface Fighter {
   totalFights: number
   currentRank: number | null
   isChampion: boolean
+  active: boolean
 }
 
 export default function Dashboard() {
@@ -47,6 +50,36 @@ export default function Dashboard() {
   const [savingPreferences, setSavingPreferences] = useState(false)
   const [loadingPreferences, setLoadingPreferences] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState<{ [key: string]: boolean }>({})
+  const [searchResults, setSearchResults] = useState<Fighter[] | null>(null)
+  const [searchLoading, setSearchLoading] = useState(false)
+
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setSearchResults(null)
+      return
+    }
+
+    const timer = setTimeout(async () => {
+      setSearchLoading(true)
+      try {
+        const response = await fetch(
+          `/api/fighters?search=${encodeURIComponent(searchQuery)}&gender=${genderTab === 'mens' ? 'MALE' : 'FEMALE'}&limit=50`
+        )
+        if (response.ok) {
+          const data = await response.json()
+          setSearchResults(data.fighters || [])
+        }
+      } catch (error) {
+        console.error('Search error:', error)
+      } finally {
+        setSearchLoading(false)
+      }
+    }, 300)
+
+    return () => clearTimeout(timer)
+  }, [searchQuery, genderTab])
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -83,70 +116,62 @@ export default function Dashboard() {
     }
   }
 
-  const loadDivisionFighters = async (divisionId: string, gender?: 'mens' | 'womens') => {
-  const currentGender = gender ?? genderTab
-  const cacheKey = `${currentGender}-${divisionId}`
-  
-  if (divisionFighters[cacheKey]) return
-
-  setLoadingDivision(divisionId)
-  try {
-    const currentDivisions = currentGender === 'mens' ? MENS_DIVISIONS : WOMENS_DIVISIONS
-    const division = currentDivisions.find(d => d.id === divisionId)
+  const loadDivisionFighters = async (divisionId: string, gender?: 'mens' | 'womens', loadMore = false) => {
+    const currentGender = gender ?? genderTab
+    const cacheKey = `${currentGender}-${divisionId}`
     
-    if (!division) return
+    if (!loadMore && divisionFighters[cacheKey]) return
+    if (loadMore && !hasMore[cacheKey]) return
 
-    const response = await fetch(
-      `/api/fighters?weightClass=${divisionId}&minWeight=${division.minWeight}&maxWeight=${division.maxWeight}&gender=${currentGender === 'mens' ? 'MALE' : 'FEMALE'}&limit=100`
-    )
-    
-    if (response.ok) {
-      const data = await response.json()
-      const fighters = data.fighters || []
+    loadMore ? setLoadingMore(true) : setLoadingDivision(divisionId)
+    try {
+      const currentDivisions = currentGender === 'mens' ? MENS_DIVISIONS : WOMENS_DIVISIONS
+      const division = currentDivisions.find(d => d.id === divisionId)
       
-      // Debug logging
-      console.log(`📊 ${divisionId} (${currentGender}): Loaded ${fighters.length} fighters`);
-      const ranked = fighters.filter((f: Fighter) => f.currentRank !== null);
-      console.log(`   Ranked: ${ranked.length}, Champions: ${ranked.filter((f: Fighter) => f.isChampion).length}`);
-      console.log(`   Top 5:`, ranked.slice(0, 5).map((f: Fighter) => 
-        `${f.firstName} ${f.lastName} (#${f.currentRank})`
-      ));
+      if (!division) return
+
+      const currentFighters = divisionFighters[cacheKey] || []
+      const offset = loadMore ? currentFighters.length : 0
+
+      const response = await fetch(
+        `/api/fighters?weightClass=${divisionId}&minWeight=${division.minWeight}&maxWeight=${division.maxWeight}&gender=${currentGender === 'mens' ? 'MALE' : 'FEMALE'}&limit=50&offset=${offset}`
+      )
       
-      const sortedFighters = fighters.sort((a: Fighter, b: Fighter) => {
-        // Sort by official ranking first (champions first, then by rank number)
-        if (a.currentRank !== null && b.currentRank !== null) {
-          return a.currentRank - b.currentRank
-        }
-        if (a.currentRank !== null) return -1
-        if (b.currentRank !== null) return 1
+      if (response.ok) {
+        const data = await response.json()
+        const fighters = data.fighters || []
         
-        // Unranked fighters: sort by win rate
-        const aWinRate = a.totalFights > 0 ? a.wins / a.totalFights : 0
-        const bWinRate = b.totalFights > 0 ? b.wins / b.totalFights : 0
-        return bWinRate - aWinRate
-      })
-      
-      setDivisionFighters(prev => ({
-        ...prev,
-        [cacheKey]: sortedFighters.slice(0, 50)
-      }))
+        const sortedFighters = fighters.sort((a: Fighter, b: Fighter) => {
+          if (a.currentRank !== null && b.currentRank !== null) return a.currentRank - b.currentRank
+          if (a.currentRank !== null) return -1
+          if (b.currentRank !== null) return 1
+          if (a.active !== b.active) return a.active ? -1 : 1
+          return `${a.lastName} ${a.firstName}`.toLowerCase().localeCompare(`${b.lastName} ${b.firstName}`.toLowerCase())
+        })
+        
+        setDivisionFighters(prev => ({
+          ...prev,
+          [cacheKey]: loadMore ? [...currentFighters, ...sortedFighters] : sortedFighters
+        }))
 
-      // Prefetch next division
-      const currentIndex = currentDivisions.findIndex(d => d.id === divisionId)
-      if (currentIndex >= 0 && currentIndex < currentDivisions.length - 1) {
-        const nextDivisionId = currentDivisions[currentIndex + 1].id
-        const nextCacheKey = `${currentGender}-${nextDivisionId}`
-        if (!divisionFighters[nextCacheKey]) {
-          setTimeout(() => loadDivisionFighters(nextDivisionId, currentGender), 100)
-        }
+        setHasMore(prev => ({
+          ...prev,
+          [cacheKey]: fighters.length === 50
+        }))
       }
+    } catch (error) {
+      console.error('Error loading division fighters:', error)
+    } finally {
+      setLoadingMore(false)
+      setLoadingDivision(null)
     }
-  } catch (error) {
-    console.error('Error loading division fighters:', error)
-  } finally {
-    setLoadingDivision(null)
   }
-}
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget
+    if (scrollHeight - scrollTop - clientHeight < 200 && !loadingMore) {
+      loadDivisionFighters(activeDivision, genderTab, true)
+    }
+  }
   
   const handleGenderTabChange = (gender: 'mens' | 'womens') => {
     setGenderTab(gender)
@@ -188,7 +213,9 @@ export default function Dashboard() {
       if (response.ok) {
         setShowWelcomeModal(false)
       } else {
-        alert('Failed to save preferences')
+        const errorData = await response.json().catch(() => ({}))
+        console.error('Save preferences failed:', response.status, errorData)
+        alert(`Failed to save preferences: ${errorData.error || response.statusText}`)
       }
     } catch (error) {
       console.error('Error saving preferences:', error)
@@ -229,14 +256,7 @@ export default function Dashboard() {
 
   const currentDivisions = genderTab === 'mens' ? MENS_DIVISIONS : WOMENS_DIVISIONS
   const allFighters = divisionFighters[`${genderTab}-${activeDivision}`] || []
-  const currentFighters = searchQuery.trim() 
-    ? allFighters.filter(fighter => {
-        const search = searchQuery.toLowerCase()
-        const fullName = `${fighter.firstName} ${fighter.lastName}`.toLowerCase()
-        const nickname = fighter.nickname?.toLowerCase() || ''
-        return fullName.includes(search) || nickname.includes(search)
-      })
-    : allFighters
+  const currentFighters = searchQuery.trim() ? (searchResults || []) : allFighters
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-black">
       {/* Header */}
@@ -250,6 +270,7 @@ export default function Dashboard() {
               <span className="text-gray-300">
                 Welcome, {session.user?.email?.split('@')[0] || 'Fighter'}
               </span>
+              <ThemeToggle />
               <button
                 onClick={handleSignOut}
                 className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg transition-colors"
@@ -294,10 +315,10 @@ export default function Dashboard() {
       {/* Welcome Modal */}
       {showWelcomeModal && (
         <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-gray-800 rounded-2xl shadow-2xl max-w-6xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="bg-gray-800 rounded-2xl shadow-2xl max-w-6xl w-full max-h-[90vh] flex flex-col">            
             {/* Modal Header */}
-            <div className="p-6 border-b border-gray-700">
-              <div className="flex items-center justify-between gap-4">
+            <div className="p-6 border-b border-gray-700 flex-shrink-0">
+                <div className="flex items-center justify-between gap-4">
                 <div>
                   <h2 className="text-2xl font-bold text-white">
                     Select Your Favorite Fighters
@@ -319,8 +340,8 @@ export default function Dashboard() {
             </div>
 
             {/* Gender Tabs */}
-            <div className="border-b border-gray-700 px-6">
-              <div className="flex space-x-1">
+            <div className="border-b border-gray-700 px-6 flex-shrink-0">
+                <div className="flex space-x-1">
                 <button
                   onClick={() => handleGenderTabChange('mens')}
                   className={`px-6 py-3 font-medium transition-colors ${
@@ -345,8 +366,8 @@ export default function Dashboard() {
             </div>
 
             {/* Division Tabs */}
-            <div className="border-b border-gray-700 px-6 overflow-x-auto">
-              <div className="flex space-x-1 min-w-max">
+              <div className="border-b border-gray-700 px-6 overflow-x-auto flex-shrink-0">
+                <div className="flex space-x-1 min-w-max">
                 {currentDivisions.map(division => (
                   <button
                     key={division.id}
@@ -365,9 +386,9 @@ export default function Dashboard() {
             </div>
 
             {/* Fighters List */}
-            <div className="p-6">
-              {loadingDivision === activeDivision ? (
-                <div className="flex justify-center py-12">
+            <div className="p-6 overflow-y-auto flex-1 min-h-0" onScroll={handleScroll}>
+                {(loadingDivision === activeDivision || searchLoading) ? (
+                  <div className="flex justify-center py-12">
                   <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-500"></div>
                 </div>
               ) : currentFighters.length > 0 ? (
@@ -382,14 +403,14 @@ export default function Dashboard() {
                       <button
                         key={fighter.id}
                         onClick={() => handleFighterToggle(fighter)}
-                        className={`p-4 rounded-lg text-left transition-all relative ${
+                        className={`p-4 rounded-lg text-left transition-all relative overflow-hidden ${
                           isSelected
                             ? 'bg-red-500 text-white shadow-lg'
                             : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                         }`}
                       >
                         {/* Ranking Badge */}
-                        <div className={`absolute top-2 right-2 px-2 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
+                        <div className={`absolute top-2 right-2 px-2 h-6 rounded-full flex items-center justify-center text-xs font-bold z-10 ${
                           fighter.isChampion ? 'bg-yellow-500 text-black' :
                           fighter.currentRank !== null ? 'bg-blue-500 text-white' :
                           'bg-gray-600 text-white'
@@ -397,7 +418,25 @@ export default function Dashboard() {
                           {fighter.isChampion ? 'C' : fighter.currentRank !== null ? `#${fighter.currentRank}` : 'NR'}
                         </div>
                         
-                        <div className="pr-8">
+                        {/* Fighter Image */}
+                        <div className="w-full aspect-square mb-3 rounded-lg overflow-hidden bg-gray-800 relative">
+                          {fighter.imageUrl ? (
+                            <Image 
+                              src={fighter.imageUrl} 
+                              alt={`${fighter.firstName} ${fighter.lastName}`}
+                              fill
+                              sizes="(max-width: 768px) 50vw, 20vw"
+                              className="object-cover"
+                              loading="lazy"
+                            />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center">
+                              <div className="text-4xl opacity-30">👤</div>
+                            </div>
+                          )}
+                        </div>
+                        
+                        <div>
                           <div className="font-semibold text-sm">
                             {fighter.firstName} {fighter.lastName}
                           </div>
@@ -421,8 +460,8 @@ export default function Dashboard() {
             </div>
 
             {/* Modal Footer */}
-            <div className="p-6 border-t border-gray-700 flex justify-between">
-              <button
+              <div className="p-6 border-t border-gray-700 flex justify-between flex-shrink-0">
+                <button
                 onClick={handleSkip}
                 className="px-4 py-2 text-gray-400 hover:text-white transition-colors"
               >
@@ -448,6 +487,11 @@ export default function Dashboard() {
               </button>
             </div>
           </div>
+           {loadingMore && (
+                  <div className="flex justify-center py-4">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-red-500"></div>
+                  </div>
+                )}
         </div>
       )}
     </div>

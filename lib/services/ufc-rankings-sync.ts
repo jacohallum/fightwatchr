@@ -24,10 +24,29 @@ const WEIGHT_CLASS_MAP: Record<string, WeightClass> = {
 
 function normalizeString(str: string): string {
   return str
-    .normalize('NFD') // Decompose combined characters
-    .replace(/[\u0300-\u036f]/g, '') // Remove diacritics
-    .replace(/ł/g, 'l') // Polish ł
-    .replace(/Ł/g, 'L') // Polish Ł
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')     // Remove diacritics (accents)
+    .replace(/ł/g, 'l')                   // Polish ł
+    .replace(/Ł/g, 'L')                   // Polish Ł
+    .replace(/ø/g, 'o')                   // Nordic ø
+    .replace(/Ø/g, 'O')                   // Nordic Ø
+    .replace(/æ/g, 'ae')                  // Nordic æ
+    .replace(/Æ/g, 'AE')                  // Nordic Æ
+    .replace(/ß/g, 'ss')                  // German ß
+    .replace(/ð/g, 'd')                   // Icelandic ð
+    .replace(/þ/g, 'th')                  // Icelandic þ
+    .replace(/ç/g, 'c')                   // Cedilla
+    .replace(/ñ/g, 'n')                   // Spanish ñ
+    .replace(/[''`´']/g, '')              // Remove apostrophes (all variants)
+    .replace(/[""„"]/g, '')               // Remove quotes
+    .replace(/-/g, ' ')                   // Replace hyphens with spaces
+    .replace(/\./g, '')                   // Remove periods (Jr. -> Jr)
+    .replace(/,/g, '')                    // Remove commas
+    .replace(/\bjr\b/gi, '')              // Remove "Jr"
+    .replace(/\bsr\b/gi, '')              // Remove "Sr"
+    .replace(/\biii\b/gi, '')             // Remove "III"
+    .replace(/\bii\b/gi, '')              // Remove "II"
+    .replace(/\s+/g, ' ')                 // Collapse multiple spaces
     .toLowerCase()
     .trim()
 }
@@ -38,7 +57,7 @@ async function findFighterByName(name: string, organizationId: string): Promise<
   const parts = cleanName.split(' ')
   const firstName = parts[0]
   const lastName = parts.slice(1).join(' ')
-  
+
   // Try exact match first
   let fighter = await prisma.fighter.findFirst({
     where: {
@@ -96,8 +115,7 @@ async function findFighterByName(name: string, organizationId: string): Promise<
             return f.id
         }
     }
-  
-  console.log(`  ⚠️  Could not match: ${cleanName}`)
+
   return null
 }
 
@@ -133,7 +151,7 @@ export async function syncUFCRankings(): Promise<{ success: boolean; rankingsPro
             }
         }
         
-        if (!weightClass) return // Skip P4P or unknown divisions
+        if (!weightClass) return // Skip P4P or unknown divisions       
         
         // Get all fighter links in this division
         const fighterLinks = $(divisionEl).find('a').toArray()
@@ -142,15 +160,17 @@ export async function syncUFCRankings(): Promise<{ success: boolean; rankingsPro
         let championFound = false
         
         for (const link of fighterLinks) {
-            const fighterName = $(link).text().trim()
-            
+            const fighterName = $(link).text().trim()       
             // Skip empty or very short text (likely not a fighter name)
             if (!fighterName || fighterName.length < 3) continue
             
             // Skip navigation/UI elements
-            if (fighterName.toLowerCase().includes('view') || 
-                fighterName.toLowerCase().includes('all') ||
-                fighterName.toLowerCase().includes('ranking')) continue
+            const lowerName = fighterName.toLowerCase()
+            if (lowerName === 'view' || 
+                lowerName === 'view all' ||
+                lowerName === 'all' ||
+                lowerName.includes('view all') ||
+                lowerName.includes('ranking')) continue
             
             if (!championFound) {
             // First valid fighter is the champion

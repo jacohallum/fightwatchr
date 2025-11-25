@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { signIn, getSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
+import ThemeToggle from '@/components/ThemeToggle'
 
 export default function Home() {
   const router = useRouter()
@@ -149,8 +150,12 @@ export default function Home() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-black flex items-center justify-center p-4 relative overflow-hidden">
+    <div className="min-h-screen bg-white dark:bg-gradient-to-br dark:from-gray-900 dark:via-gray-800 dark:to-black flex items-center justify-center p-4 relative overflow-hidden">
       <div className="max-w-md w-full space-y-12 relative z-20">
+      {/* Theme Toggle */}
+      <div className="absolute top-4 right-4 z-30">
+        <ThemeToggle />
+      </div>
         {/* Section 1: Logo/Brand */}
         <div className="text-center">
           <h1 className="text-5xl font-bold text-white mb-2">

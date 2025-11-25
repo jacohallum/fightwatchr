@@ -164,15 +164,40 @@ export async function POST() {
                 }
               }
 
-              // Parse gender
+              // Parse gender - check multiple sources
               let gender: 'MALE' | 'FEMALE' = 'MALE'
+              
+              // 1. Check ESPN gender field
               if (athleteData.gender) {
                 const genderValue = typeof athleteData.gender === 'string'
                   ? athleteData.gender
                   : athleteData.gender.name || athleteData.gender.type
                 
-                if (genderValue) {
-                  gender = genderValue.toUpperCase() === 'FEMALE' ? 'FEMALE' : 'MALE'
+                if (genderValue?.toUpperCase() === 'FEMALE') {
+                  gender = 'FEMALE'
+                }
+              }
+              
+              // 2. Check competition/event name for "Women's"
+              if (gender === 'MALE') {
+                const compName = comp.name?.toLowerCase() || ''
+                const eventName = eventData.name?.toLowerCase() || ''
+                const notes = comp.notes?.map((n: any) => n.headline?.toLowerCase() || '').join(' ') || ''
+                
+                if (compName.includes('women') || eventName.includes('women') || notes.includes('women')) {
+                  gender = 'FEMALE'
+                }
+              }
+              
+              // 3. Infer from weight class - Strawweight in UFC is women-only
+              if (gender === 'MALE') {
+                const wcText = (athleteData.weightClass?.text || '').toLowerCase()
+                if (wcText.includes('women') || wcText.includes("women's")) {
+                  gender = 'FEMALE'
+                }
+                // UFC Strawweight (115 lbs) is women-only
+                if (wcText === 'strawweight' || fighterWeightClass?.toLowerCase() === 'strawweight') {
+                  gender = 'FEMALE'
                 }
               }
 
@@ -217,6 +242,32 @@ export async function POST() {
                 }
               } catch (err) {
                 console.error('Error fetching fighter records:', err)
+              }
+              // Check for existing fighter by normalized name (handles accents)
+              const normalizedFirst = athleteData.firstName?.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim() || ''
+              const normalizedLast = athleteData.lastName?.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim() || ''
+              
+              // Get all fighters and check with full normalization
+              const potentialMatches = await prisma.fighter.findMany({
+                where: {
+                  organizationId: ufc.id,
+                  lastName: { mode: 'insensitive', startsWith: normalizedLast.slice(0, 4) }
+                }
+              })
+              
+              const existingByName = potentialMatches.find(f => {
+                const dbFirst = f.firstName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim()
+                const dbLast = f.lastName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim()
+                return dbFirst === normalizedFirst && dbLast === normalizedLast
+              })
+              
+              // If found by name but different espnId, update the espnId
+              if (existingByName && existingByName.espnId !== athleteData.id) {
+                console.log(`⚠️ Found duplicate: ${athleteData.firstName} ${athleteData.lastName} - updating espnId`)
+                await prisma.fighter.update({
+                  where: { id: existingByName.id },
+                  data: { espnId: athleteData.id }
+                })
               }
 
               const fighter = await prisma.fighter.upsert({

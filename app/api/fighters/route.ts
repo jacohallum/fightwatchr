@@ -4,6 +4,10 @@ import { prisma } from '@/lib/prisma';
 import { getServerSession } from 'next-auth';
 import { WeightClass } from '@prisma/client';
 
+function normalizeString(str: string): string {
+  return str.toLowerCase().replace(/[^a-z0-9\s]/g, '');
+}
+
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
@@ -37,52 +41,14 @@ export async function GET(request: NextRequest) {
       where.gender = gender;
     }
 
-    if (search) {
-      where.OR = [
-        { firstName: { contains: search, mode: 'insensitive' } },
-        { lastName: { contains: search, mode: 'insensitive' } },
-        { nickname: { contains: search, mode: 'insensitive' } }
-      ];
-    }
+    // Search will be handled post-query with normalization
+    const searchNormalized = search ? normalizeString(search) : null;
 
-    // Debug: Log the exact WHERE clause being built
-    console.log('\n🔧 Building query with:');
-    console.log('  where:', JSON.stringify(where, null, 2));
-    console.log('  weightClass:', weightClass);
-    console.log('  orgId:', orgId);
-    console.log('  rankings.some filter:', JSON.stringify({
-      active: true,
-      weightClass: weightClass,
-      ...(orgId ? { organizationId: orgId } : {})
-    }, null, 2));
-
-    // Get fighters with their rankings filtered by weight class
-    const fighters = await prisma.fighter.findMany({
+// Get ranked fighters in this weight class
+    const rankedFighters = await prisma.fighter.findMany({
       where: {
         ...where,
-        // Get fighters who EITHER have rankings in this division OR fall in weight range
-        ...(weightClass && minWeight && maxWeight ? {
-          OR: [
-            // Has ranking in this division
-            {
-              rankings: {
-                some: {
-                  active: true,
-                  weightClass: weightClass as WeightClass,
-                  ...(orgId ? { organizationId: orgId } : {})
-                }
-              }
-            },
-            // OR is in the weight range (for unranked fighters)
-            {
-              weight: {
-                gte: parseInt(minWeight),
-                lte: parseInt(maxWeight)
-              }
-            }
-          ]
-        } : weightClass ? {
-          // If no weight range provided, only get ranked fighters
+        ...(weightClass ? {
           rankings: {
             some: {
               active: true,
@@ -106,40 +72,48 @@ export async function GET(request: NextRequest) {
       }
     });
 
-
-    // TEMP DEBUG – inspect rankings coming from Prisma
-    if (weightClass) {
-      const sampleWithRank = fighters
-        .filter(f => f.rankings && f.rankings.length > 0)
-        .slice(0, 5);
-
-      console.log('==== RANKING DEBUG ====');
-      console.log('WeightClass:', weightClass, 'Gender:', gender, 'OrgId:', orgId);
-      console.log('Total fighters returned:', fighters.length);
-      console.log('Fighters with rankings:', sampleWithRank.length);
-      for (const f of sampleWithRank) {
-        console.log(
-          `  ${f.firstName} ${f.lastName} ->`,
-          f.rankings.map(r => `(${r.weightClass} org=${r.organizationId} rank=${r.rank})`)
-        );
-      }
-      console.log('=======================');
+    // Get unranked fighters in weight range (only if weightClass specified with weight bounds)
+    let unrankedFighters: typeof rankedFighters = [];
+    if (weightClass && minWeight && maxWeight) {
+      const rankedIds = rankedFighters.map(f => f.id);
+      unrankedFighters = await prisma.fighter.findMany({
+        where: {
+          id: { notIn: rankedIds },
+          weight: {
+            gte: parseFloat(minWeight),
+            lte: parseFloat(maxWeight)
+          },
+          ...(gender ? { gender: gender as any } : {}),
+        },
+        orderBy: [
+          { lastName: 'asc' },
+          { firstName: 'asc' }
+        ],
+        include: {
+          rankings: {
+            where: {
+              active: true
+            }
+          }
+        }
+      });
     }
 
-    // Only include fighters who have rankings in this specific division OR fall in weight range
-    const relevantFighters = weightClass
-      ? fighters.filter(fighter => {
-          // Has ranking in this specific division
-          if (fighter.rankings.length > 0) return true;
-          
-          // Unranked but in weight range
-          if (minWeight && maxWeight && fighter.weight) {
-            return fighter.weight >= parseInt(minWeight) && fighter.weight <= parseInt(maxWeight);
-          }
-          
-          return false;
-        })
-      : fighters;
+    let relevantFighters = [...rankedFighters, ...unrankedFighters];
+
+    // Filter by normalized search
+    if (searchNormalized) {
+      relevantFighters = relevantFighters.filter(fighter => {
+        const firstName = normalizeString(fighter.firstName);
+        const lastName = normalizeString(fighter.lastName);
+        const nickname = fighter.nickname ? normalizeString(fighter.nickname) : '';
+        const fullName = `${firstName} ${lastName}`;
+        return firstName.includes(searchNormalized) || 
+               lastName.includes(searchNormalized) || 
+               nickname.includes(searchNormalized) ||
+               fullName.includes(searchNormalized);
+      });
+    }
 
     const formattedFighters = relevantFighters
       .map(fighter => {
@@ -153,7 +127,7 @@ export async function GET(request: NextRequest) {
           rankings: undefined
         };
       })
-      .slice(0, limit);
+      .slice(offset, offset + limit);
 
     return NextResponse.json({
       fighters: formattedFighters,

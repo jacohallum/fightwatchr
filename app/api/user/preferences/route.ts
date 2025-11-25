@@ -15,11 +15,7 @@ export async function GET(request: NextRequest) {
 
     const user = await prisma.user.findUnique({
       where: { email: session.user.email },
-      select: { 
-        id: true,
-        email: true, 
-        preferences: true 
-      }
+      include: { preferences: true }
     })
 
     if (!user) {
@@ -28,7 +24,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       preferences: user.preferences,
-      hasPreferences: !!user.preferences
+      hasPreferences: !!user.preferences && !user.preferences.skipped
     })
 
   } catch (error) {
@@ -49,42 +45,41 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const { sports, teams } = await request.json()
+    const body = await request.json()
+    const { fighters, skipped } = body
 
-    // Validate input
-    if (!Array.isArray(sports) || typeof teams !== 'object') {
-      return NextResponse.json(
-        { error: 'Invalid data format' },
-        { status: 400 }
-      )
-    }
-
-    // Create preferences object
-    const preferences = {
-      sports,
-      teams,
-      updatedAt: new Date().toISOString()
-    }
-
-    // Save to database
-    const updatedUser = await prisma.user.update({
+    // Get user
+    const user = await prisma.user.findUnique({
       where: { email: session.user.email },
-      data: { preferences },
-      select: {
-        id: true,
-        email: true,
-        preferences: true
+      select: { id: true }
+    })
+
+    if (!user) {
+      return NextResponse.json({ error: 'User not found' }, { status: 404 })
+    }
+
+    // Upsert preferences
+    const preferences = await prisma.userPreferences.upsert({
+      where: { userId: user.id },
+      update: {
+        fighters: fighters || [],
+        skipped: skipped || false,
+        updatedAt: new Date()
+      },
+      create: {
+        userId: user.id,
+        fighters: fighters || [],
+        skipped: skipped || false
       }
     })
 
     console.log(`✅ Preferences saved for user: ${session.user.email}`)
-    console.log('Sports:', sports)
-    console.log('Teams count:', Object.keys(teams).length)
+    console.log('Fighters count:', fighters?.length || 0)
 
     return NextResponse.json({
       success: true,
       message: 'Preferences saved successfully',
-      preferences: updatedUser.preferences
+      preferences
     })
 
   } catch (error) {
@@ -107,39 +102,31 @@ export async function PUT(request: NextRequest) {
 
     const updates = await request.json()
 
-    // Get current preferences
     const user = await prisma.user.findUnique({
       where: { email: session.user.email },
-      select: { preferences: true }
+      include: { preferences: true }
     })
 
     if (!user) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 })
     }
 
-    // Merge with existing preferences - Fix the type casting here
-    const currentPreferences = (user.preferences as Record<string, any>) || {}
-    const updatedPreferences = {
-      ...currentPreferences,
-      ...updates,
-      updatedAt: new Date().toISOString()
+    if (!user.preferences) {
+      return NextResponse.json({ error: 'No preferences to update' }, { status: 404 })
     }
 
-    // Save updated preferences
-    const updatedUser = await prisma.user.update({
-      where: { email: session.user.email },
-      data: { preferences: updatedPreferences },
-      select: {
-        id: true,
-        email: true,
-        preferences: true
+    const updatedPreferences = await prisma.userPreferences.update({
+      where: { userId: user.id },
+      data: {
+        ...updates,
+        updatedAt: new Date()
       }
     })
 
     return NextResponse.json({
       success: true,
       message: 'Preferences updated successfully',
-      preferences: updatedUser.preferences
+      preferences: updatedPreferences
     })
 
   } catch (error) {
@@ -160,11 +147,17 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    await prisma.user.update({
+    const user = await prisma.user.findUnique({
       where: { email: session.user.email },
-      data: { 
-        preferences: undefined // Use undefined instead of null
-      }
+      select: { id: true }
+    })
+
+    if (!user) {
+      return NextResponse.json({ error: 'User not found' }, { status: 404 })
+    }
+
+    await prisma.userPreferences.deleteMany({
+      where: { userId: user.id }
     })
 
     return NextResponse.json({
