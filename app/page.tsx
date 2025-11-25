@@ -159,7 +159,7 @@ export default function Home() {
         {/* Section 1: Logo/Brand */}
         <div className="text-center">
           <h1 className="text-5xl font-bold text-white mb-2">
-            Game<span className="text-red-500">Watchr</span>
+            Fight<span className="text-red-500">Watchr</span>
           </h1>
           <p className="text-gray-400 text-lg">Your AI-Powered Sports Command Center</p>
         </div>

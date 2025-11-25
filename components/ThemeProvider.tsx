@@ -13,40 +13,29 @@ const ThemeContext = createContext<{
 
 export const useTheme = () => useContext(ThemeContext)
 
-const getPreferredTheme = (): Theme => {
-  if (typeof window === 'undefined') return 'dark'
-
-  const saved = localStorage.getItem('theme') as Theme | null
-  if (saved === 'light' || saved === 'dark') return saved
-
-  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-  return prefersDark ? 'dark' : 'light'
-}
-
 export default function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setTheme] = useState<Theme>(() => getPreferredTheme())
+  const [theme, setTheme] = useState<Theme>('dark')
+  const [mounted, setMounted] = useState(false)
 
+  // Only run on client after mount
   useEffect(() => {
-    document.documentElement.classList.toggle('dark', theme === 'dark')
-  }, [theme])
-
-  useEffect(() => {
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
-    const handleChange = (event: MediaQueryListEvent) => {
-      const saved = localStorage.getItem('theme') as Theme | null
-      if (!saved) {
-        setTheme(event.matches ? 'dark' : 'light')
-      }
-    }
-
-    mediaQuery.addEventListener('change', handleChange)
-    return () => mediaQuery.removeEventListener('change', handleChange)
+    setMounted(true)
+    const saved = localStorage.getItem('theme') as Theme | null
+    const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+    const initialTheme = saved === 'light' || saved === 'dark' ? saved : (systemPrefersDark ? 'dark' : 'light')
+    
+    setTheme(initialTheme)
   }, [])
 
+  useEffect(() => {
+    if (!mounted) return
+    
+    document.documentElement.classList.toggle('dark', theme === 'dark')
+    localStorage.setItem('theme', theme)
+  }, [theme, mounted])
+
   const toggleTheme = () => {
-    const newTheme = theme === 'dark' ? 'light' : 'dark'
-    setTheme(newTheme)
-    localStorage.setItem('theme', newTheme)
+    setTheme(prev => prev === 'dark' ? 'light' : 'dark')
   }
 
   return (
