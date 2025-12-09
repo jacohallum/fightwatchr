@@ -150,18 +150,18 @@ export default function Home() {
   }
 
   return (
-    <div className="min-h-screen bg-white dark:bg-gradient-to-br dark:from-gray-900 dark:via-gray-800 dark:to-black flex items-center justify-center p-4 relative overflow-hidden">
-      <div className="max-w-md w-full space-y-12 relative z-20">
+  <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden">
+    <div className="max-w-md w-full space-y-12 relative z-20">
       {/* Theme Toggle */}
       <div className="absolute top-4 right-4 z-30">
         <ThemeToggle />
       </div>
         {/* Section 1: Logo/Brand */}
         <div className="text-center">
-          <h1 className="text-5xl font-bold text-white mb-2">
+          <h1 className="text-5xl font-bold text-gray-900 dark:text-white mb-2">
             Fight<span className="text-red-500">Watchr</span>
           </h1>
-          <p className="text-gray-400 text-lg">Your AI-Powered Sports Command Center</p>
+          <p className="text-gray-600 dark:text-gray-400 text-lg">Your AI-Powered Sports Command Center</p>
         </div>
 
         {/* Section 2: Auth Card with Octagon Shape and Ticker */}
@@ -303,7 +303,7 @@ export default function Home() {
         </div>
 
         {/* Section 3: App Features */}
-        <div className="text-center text-gray-400 text-sm space-y-1">
+        <div className="text-center text-gray-600 dark:text-gray-400 text-sm space-y-1">
           <p>🥊 Track your favorite fighters</p>
           <p>📅 Never miss an event</p>
           <p>🔔 Get personalized notifications</p>

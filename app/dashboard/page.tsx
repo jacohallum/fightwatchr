@@ -1,9 +1,9 @@
-// app\dashboard\page.tsx
 'use client'
 import { useEffect, useState } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import FighterSelectModal from '@/components/FighterSelectModal'
+import ThemeToggle from '@/components/ThemeToggle'
 
 interface Fighter {
   id: string
@@ -91,8 +91,8 @@ export default function Dashboard() {
 
   if (status === 'loading' || loadingPreferences) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-black flex items-center justify-center">
-        <div className="text-white text-lg">Loading...</div>
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
+        <div className="text-gray-900 dark:text-white text-lg">Loading...</div>
       </div>
     )
   }
@@ -102,21 +102,26 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-black">
+    <div className="min-h-screen">
+      {/* Theme Toggle */}
+      <div className="absolute top-4 right-4 z-30">
+        <ThemeToggle />
+      </div>
+
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {selectedFighters.length > 0 && !showWelcomeModal && (
-          <div className="bg-gray-800/50 rounded-lg p-6 mb-8">
-            <h3 className="text-xl font-semibold text-white mb-4">Your Favorite Fighters</h3>
+          <div className="bg-white dark:bg-gray-800/50 rounded-lg p-6 mb-8 shadow-lg">
+            <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Your Favorite Fighters</h3>
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
               {selectedFighters.map(fighter => (
-                <div key={fighter.id} className="bg-gray-700 rounded-lg p-3 text-center">
-                  <div className="font-semibold text-white text-sm">
+                <div key={fighter.id} className="bg-gray-100 dark:bg-gray-700 rounded-lg p-3 text-center">
+                  <div className="font-semibold text-gray-900 dark:text-white text-sm">
                     {fighter.firstName} {fighter.lastName}
                   </div>
                   {fighter.nickname && (
-                    <div className="text-xs text-gray-400">"{fighter.nickname}"</div>
+                    <div className="text-xs text-gray-600 dark:text-gray-400">"{fighter.nickname}"</div>
                   )}
-                  <div className="text-xs text-gray-300 mt-1">
+                  <div className="text-xs text-gray-700 dark:text-gray-300 mt-1">
                     {fighter.wins}-{fighter.losses}-{fighter.draws}
                   </div>
                 </div>
@@ -124,7 +129,7 @@ export default function Dashboard() {
             </div>
             <button
               onClick={() => setShowWelcomeModal(true)}
-              className="mt-4 bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg transition-colors text-sm"
+              className="mt-4 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-900 dark:text-white px-4 py-2 rounded-lg transition-colors text-sm"
             >
               Add More Fighters
             </button>
