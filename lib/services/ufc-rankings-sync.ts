@@ -26,27 +26,27 @@ function normalizeString(str: string): string {
   return str
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')     // Remove diacritics (accents)
-    .replace(/ł/g, 'l')                   // Polish ł
-    .replace(/Ł/g, 'L')                   // Polish Ł
-    .replace(/ø/g, 'o')                   // Nordic ø
-    .replace(/Ø/g, 'O')                   // Nordic Ø
-    .replace(/æ/g, 'ae')                  // Nordic æ
-    .replace(/Æ/g, 'AE')                  // Nordic Æ
-    .replace(/ß/g, 'ss')                  // German ß
-    .replace(/ð/g, 'd')                   // Icelandic ð
-    .replace(/þ/g, 'th')                  // Icelandic þ
-    .replace(/ç/g, 'c')                   // Cedilla
-    .replace(/ñ/g, 'n')                   // Spanish ñ
-    .replace(/[''`´']/g, '')              // Remove apostrophes (all variants)
-    .replace(/[""„"]/g, '')               // Remove quotes
-    .replace(/-/g, ' ')                   // Replace hyphens with spaces
-    .replace(/\./g, '')                   // Remove periods (Jr. -> Jr)
-    .replace(/,/g, '')                    // Remove commas
-    .replace(/\bjr\b/gi, '')              // Remove "Jr"
-    .replace(/\bsr\b/gi, '')              // Remove "Sr"
-    .replace(/\biii\b/gi, '')             // Remove "III"
-    .replace(/\bii\b/gi, '')              // Remove "II"
-    .replace(/\s+/g, ' ')                 // Collapse multiple spaces
+    .replace(/ł/g, 'l')                  // Polish ł
+    .replace(/Ł/g, 'L')                  // Polish Ł
+    .replace(/ø/g, 'o')                  // Nordic ø
+    .replace(/Ø/g, 'O')                  // Nordic Ø
+    .replace(/æ/g, 'ae')                 // Nordic æ
+    .replace(/Æ/g, 'AE')                 // Nordic Æ
+    .replace(/ß/g, 'ss')                 // German ß
+    .replace(/ð/g, 'd')                  // Icelandic ð
+    .replace(/þ/g, 'th')                 // Icelandic þ
+    .replace(/ç/g, 'c')                  // Cedilla
+    .replace(/ñ/g, 'n')                  // Spanish ñ
+    .replace(/['’`´]/g, '')              // All apostrophe / quote variants you care about
+    .replace(/[""„"]/g, '')              // Remove quotes
+    .replace(/-/g, ' ')                  // Replace hyphens with spaces
+    .replace(/\./g, '')                  // Remove periods (Jr. -> Jr)
+    .replace(/,/g, '')                   // Remove commas
+    .replace(/\bjr\b/gi, '')             // Remove "Jr"
+    .replace(/\bsr\b/gi, '')             // Remove "Sr"
+    .replace(/\biii\b/gi, '')            // Remove "III"
+    .replace(/\bii\b/gi, '')             // Remove "II"
+    .replace(/\s+/g, ' ')                // Collapse multiple spaces
     .toLowerCase()
     .trim()
 }
@@ -58,7 +58,7 @@ async function findFighterByName(name: string, organizationId: string): Promise<
   const firstName = parts[0]
   const lastName = parts.slice(1).join(' ')
 
-  // Try exact match first
+  // Try exact match first (case-insensitive)
   let fighter = await prisma.fighter.findFirst({
     where: {
       organizationId,
@@ -73,48 +73,58 @@ async function findFighterByName(name: string, organizationId: string): Promise<
   
   if (fighter) return fighter.id
   
+  // Try with normalized names (handles apostrophes, accents, etc.)
+  const normalizedFirstName = normalizeString(firstName)
+  const normalizedLastName = normalizeString(lastName)
+  
+  fighter = await prisma.fighter.findFirst({
+    where: {
+      organizationId,
+      OR: [
+        { 
+          firstName: { equals: normalizedFirstName, mode: 'insensitive' },
+          lastName: { equals: normalizedLastName, mode: 'insensitive' }
+        }
+      ]
+    }
+  })
+  
+  if (fighter) return fighter.id
+  
   // Try fuzzy match - get all fighters and normalize for comparison
-    const allFighters = await prisma.fighter.findMany({
+  const allFighters = await prisma.fighter.findMany({
     where: { organizationId }
-    })
+  })
 
-    // Debug: show potential matches for troublesome names
-    if (cleanName.includes('Błachowicz') || cleanName.includes('Blachowicz')) {
-        // Search by first name only to see all "Jan" fighters
-        const candidates = allFighters.filter(f => 
-            normalizeString(f.firstName) === normalizeString(firstName)
-        )
+  for (const f of allFighters) {
+    const dbFullName = normalizeString(`${f.firstName} ${f.lastName}`)
+    const dbLastName = normalizeString(f.lastName)
+    const searchLastName = normalizeString(lastName)
+    
+    // Full name match
+    if (dbFullName === normalizedSearchName) {
+      return f.id
     }
-
-    for (const f of allFighters) {
-        const dbFullName = normalizeString(`${f.firstName} ${f.lastName}`)
-        const dbLastName = normalizeString(f.lastName)
-        const searchLastName = normalizeString(lastName)
-        
-        // Full name match
-        if (dbFullName === normalizedSearchName) {
-            return f.id
-        }
-        
-        // Handle hyphens vs spaces (e.g., "Cortes-Acosta" vs "Cortes Acosta")
-        const dbFullNameNoHyphen = dbFullName.replace(/-/g, ' ')
-        const searchNameNoHyphen = normalizedSearchName.replace(/-/g, ' ')
-        if (dbFullNameNoHyphen === searchNameNoHyphen) {
-            return f.id
-        }
-        
-        // Last name match + first name starts with
-        if (dbLastName === searchLastName && 
-            normalizeString(f.firstName).startsWith(normalizeString(firstName))) {
-            return f.id
-        }
-        
-        // Last name partial match (handles "Błachowicz" stored as "Blachowicz")
-        if (dbLastName.replace(/-/g, ' ') === searchLastName.replace(/-/g, ' ') &&
-            normalizeString(f.firstName) === normalizeString(firstName)) {
-            return f.id
-        }
+    
+    // Handle hyphens vs spaces (e.g., "Cortes-Acosta" vs "Cortes Acosta")
+    const dbFullNameNoHyphen = dbFullName.replace(/ /g, '')
+    const searchNameNoHyphen = normalizedSearchName.replace(/ /g, '')
+    if (dbFullNameNoHyphen === searchNameNoHyphen) {
+      return f.id
     }
+    
+    // Last name match + first name starts with
+    if (dbLastName === searchLastName && 
+        normalizeString(f.firstName).startsWith(normalizeString(firstName))) {
+      return f.id
+    }
+    
+    // Last name partial match (handles "Błachowicz" stored as "Blachowicz")
+    if (dbLastName.replace(/ /g, '') === searchLastName.replace(/ /g, '') &&
+        normalizeString(f.firstName) === normalizeString(firstName)) {
+      return f.id
+    }
+  }
 
   return null
 }
@@ -140,60 +150,61 @@ export async function syncUFCRankings(): Promise<{ success: boolean; rankingsPro
     
     // Parse each division
     $('.view-grouping').each((_, divisionEl) => {
-        const divisionTitle = $(divisionEl).find('.view-grouping-header').text().trim().toLowerCase()
-        
-        // Extract weight class from title
-        let weightClass: WeightClass | null = null
-        for (const [key, value] of Object.entries(WEIGHT_CLASS_MAP)) {
-            if (divisionTitle.includes(key)) {
-            weightClass = value
-            break
-            }
+      const divisionTitle = $(divisionEl).find('.view-grouping-header').text().trim().toLowerCase()
+      
+      // Extract weight class from title
+      let weightClass: WeightClass | null = null
+      for (const [key, value] of Object.entries(WEIGHT_CLASS_MAP)) {
+        if (divisionTitle.includes(key)) {
+          weightClass = value
+          break
         }
+      }
+      
+      if (!weightClass) return // Skip P4P or unknown divisions       
+      
+      // Get all fighter links in this division
+      const fighterLinks = $(divisionEl).find('a').toArray()
+      
+      let rank = 0
+      let championFound = false
+      
+      for (const link of fighterLinks) {
+        const fighterName = $(link).text().trim()       
+        // Skip empty or very short text (likely not a fighter name)
+        if (!fighterName || fighterName.length < 3) continue
         
-        if (!weightClass) return // Skip P4P or unknown divisions       
+        // Skip navigation/UI elements
+        const lowerName = fighterName.toLowerCase()
+        if (lowerName === 'view' || 
+            lowerName === 'view all' ||
+            lowerName === 'all' ||
+            lowerName.includes('view all') ||
+            lowerName.includes('ranking')) continue
         
-        // Get all fighter links in this division
-        const fighterLinks = $(divisionEl).find('a').toArray()
-        
-        let rank = 0
-        let championFound = false
-        
-        for (const link of fighterLinks) {
-            const fighterName = $(link).text().trim()       
-            // Skip empty or very short text (likely not a fighter name)
-            if (!fighterName || fighterName.length < 3) continue
-            
-            // Skip navigation/UI elements
-            const lowerName = fighterName.toLowerCase()
-            if (lowerName === 'view' || 
-                lowerName === 'view all' ||
-                lowerName === 'all' ||
-                lowerName.includes('view all') ||
-                lowerName.includes('ranking')) continue
-            
-            if (!championFound) {
-            // First valid fighter is the champion
-            rankings.push({ weightClass, rank: 0, fighterName })
-            championFound = true
-            rank = 1
-            } else if (rank <= 15) {
-            // Next 15 are ranked fighters
-            rankings.push({ weightClass, rank, fighterName })
-            rank++
-            } else {
-            break // Stop after top 15
-            }
+        if (!championFound) {
+          // First valid fighter is the champion
+          rankings.push({ weightClass, rank: 0, fighterName })
+          championFound = true
+          rank = 1
+        } else if (rank <= 15) {
+          // Next 15 are ranked fighters
+          rankings.push({ weightClass, rank, fighterName })
+          rank++
+        } else {
+          break // Stop after top 15
         }
+      }
     })
     
     // Delete all existing active rankings instead of deactivating
     await prisma.ranking.deleteMany({
-    where: { organizationId: ufc.id, active: true }
+      where: { organizationId: ufc.id, active: true }
     })
     
     let processed = 0
     let notFound = 0
+    const notFoundFighters: Array<{ name: string; weightClass: string; rank: number }> = []
     
     // Create new rankings
     for (const ranking of rankings) {
@@ -224,12 +235,26 @@ export async function syncUFCRankings(): Promise<{ success: boolean; rankingsPro
         processed++
       } else {
         notFound++
+        notFoundFighters.push({
+          name: ranking.fighterName,
+          weightClass: ranking.weightClass,
+          rank: ranking.rank
+        })
+        console.log(`⚠️  Fighter not found: "${ranking.fighterName}" (${ranking.weightClass}, Rank ${ranking.rank})`)
+        console.log(`    Normalized: "${normalizeString(ranking.fighterName)}"`)
       }
     }
     
     console.log(`\n✅ Rankings sync complete!`)
     console.log(`   Processed: ${processed}`)
     console.log(`   Not Found: ${notFound}`)
+    
+    if (notFoundFighters.length > 0) {
+      console.log(`\n⚠️  Missing fighters:`)
+      notFoundFighters.forEach(f => {
+        console.log(`   - ${f.name} (${f.weightClass}, Rank ${f.rank})`)
+      })
+    }
     
     return { success: true, rankingsProcessed: processed }
   } catch (error) {
