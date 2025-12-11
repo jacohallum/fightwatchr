@@ -315,11 +315,17 @@ model UserPreferences {
   // Timezone
   timezone             String    @default("America/New_York")
   
+  // Dashboard Customization (NEW - ADD THESE THREE LINES)
+  enabledSections      Json      @default("[]")
+  sectionOrder         Json      @default("[]")
+  layoutPreferences    Json      @default("{}")
+  
+  // Fighter Preferences (EXISTING - KEEP THESE)
+  fighters             Json      @default("[]")
+  skipped              Boolean   @default(false)
+  
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
-
-  fighters            Json      @default("[]")
-  skipped             Boolean   @default(false)
 }
 
 // Enums

@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   DEFAULT_PREFERENCES,
-  LayoutPreferences,
   LiveEventPosition,
   SectionId,
   UserPreferences,
@@ -42,7 +41,10 @@ export function useDashboardPreferences() {
         if (!res.ok) return
 
         const json = await res.json()
-        const serverPrefs = validatePreferences(json)
+        
+        // FIX: Extract preferences from nested response
+        const prefsData = json.preferences || json
+        const serverPrefs = validatePreferences(prefsData)
         lastServerPrefs.current = serverPrefs
 
         if (!hasLocalEdits.current) {
@@ -63,8 +65,10 @@ export function useDashboardPreferences() {
     window.localStorage.setItem(LS_KEY, JSON.stringify(validated))
 
     try {
+      // Using POST for now since PATCH isn't implemented yet
+      // TODO: Change to PATCH once API is updated
       const res = await fetch('/api/user/preferences', {
-        method: 'PATCH',
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(validated),
       })
@@ -72,7 +76,10 @@ export function useDashboardPreferences() {
       if (!res.ok) throw new Error('Failed to save')
 
       const json = await res.json()
-      const serverPrefs = validatePreferences(json)
+      
+      // FIX: Extract preferences from nested response
+      const prefsData = json.preferences || json
+      const serverPrefs = validatePreferences(prefsData)
       lastServerPrefs.current = serverPrefs
       setPrefs(serverPrefs)
       window.localStorage.setItem(LS_KEY, JSON.stringify(serverPrefs))
@@ -86,10 +93,11 @@ export function useDashboardPreferences() {
         )
       }
       console.error('Failed to save preferences:', err)
+      // TODO: Show user-facing error notification
     }
   }
 
-  // Convenience handlers (thin wrappers around your pseudocode)
+  // Convenience handlers
 
   function toggleSection(sectionId: SectionId) {
     const { enabledSections, sectionOrder, layoutPreferences } = prefs

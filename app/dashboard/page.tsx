@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation'
 import FighterSelectModal from '@/components/FighterSelectModal'
 import ThemeToggle from '@/components/ThemeToggle'
 
-// NEW: import dashboard prefs + live event hooks
+// import dashboard prefs + live event hooks
 import { useDashboardPreferences } from '@/src/features/dashboard/useDashboardPreferences'
 import { useLiveEventData } from '@/src/features/dashboard/useLiveEventData'
 import { SECTION_COMPONENTS } from '@/src/features/dashboard/sectionRegistry'
@@ -32,7 +32,7 @@ export default function Dashboard() {
   const { data: session, status } = useSession()
   const router = useRouter()
 
-  // NEW: Dashboard preferences + live event
+  // Dashboard preferences + live event
   const {
     preferences,
     toggleSection,
@@ -46,7 +46,7 @@ export default function Dashboard() {
 
   const { data: liveData } = useLiveEventData()
 
-  // OLD: Favorite fighters state
+  // Favorite fighters state
   const [showWelcomeModal, setShowWelcomeModal] = useState(false)
   const [selectedFighters, setSelectedFighters] = useState<Fighter[]>([])
   const [loadingFighters, setLoadingFighters] = useState(true)
@@ -58,7 +58,7 @@ export default function Dashboard() {
   const showLiveEvent =
     liveEventEnabled && hasLiveEvent && liveEventPosition !== 'hidden'
 
-  // Auth + initial favorite fighters load (MERGED LOGIC)
+  // Auth + initial favorite fighters load
   useEffect(() => {
     if (status === 'unauthenticated') {
       router.replace('/')
@@ -67,39 +67,54 @@ export default function Dashboard() {
     }
   }, [status, router])
 
-  // OLD LOGIC: Load favorite fighters from /api/user/favorite-fighters
+  // Load favorite fighters from /api/user/preferences
   const loadFavoriteFighters = async () => {
     try {
       setLoadingFighters(true)
-      const response = await fetch('/api/user/favorite-fighters')
+      const response = await fetch('/api/user/preferences')
+
+      // Debug logging
+      console.log('API Response Status:', response.status, response.ok)
 
       if (response.ok) {
         const data = await response.json()
-        const fighters: Fighter[] = data.fighters ?? []
-        const skipped: boolean = data.skipped ?? false
+        
+        // Debug logging
+        console.log('API Response Data:', data)
+        
+        // Extract fighters and skipped from preferences object
+        const fighters: Fighter[] = data.preferences?.fighters ?? []
+        const skipped: boolean = data.preferences?.skipped ?? false
+        
+        console.log('Fighters count:', fighters.length)
+        console.log('Skipped flag:', skipped)
 
         setSelectedFighters(fighters)
 
-        if (fighters.length === 0 && !skipped) {
-          setShowWelcomeModal(true)
-        } else {
-          setShowWelcomeModal(false)
-        }
+        // Only show modal if truly no fighters AND not skipped
+        const shouldShowModal = fighters.length === 0 && !skipped
+        console.log('Should show modal:', shouldShowModal)
+        setShowWelcomeModal(shouldShowModal)
       } else {
-        // If the endpoint fails, fall back to showing the welcome modal
-        setShowWelcomeModal(true)
+        // Debug: Log the error response
+        const errorText = await response.text()
+        console.error('API Error Response:', errorText)
+        
+        // Don't automatically show modal on error
+        console.warn('Failed to load fighters, but not showing modal')
       }
     } catch (error) {
       console.error('Error loading favorite fighters:', error)
-      setShowWelcomeModal(true)
+      // Don't show modal on error - could be temporary network issue
+      console.warn('Error loading fighters, but not showing modal')
     } finally {
       setLoadingFighters(false)
     }
   }
 
-  // OLD LOGIC: Save fighters
+  // Save fighters to /api/user/preferences
   const handleSaveFighters = async (fighters: Fighter[]) => {
-    const response = await fetch('/api/user/favorite-fighters', {
+    const response = await fetch('/api/user/preferences', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fighters }),
@@ -114,21 +129,23 @@ export default function Dashboard() {
     }
   }
 
-  // OLD LOGIC: Skip selection
+  // Skip selection
   const handleSkip = async () => {
     try {
-      await fetch('/api/user/favorite-fighters', {
+      await fetch('/api/user/preferences', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fighters: [], skipped: true }),
       })
+      setShowWelcomeModal(false)
     } catch (error) {
       console.error('Error saving skip flag:', error)
+      // Still close the modal even if save failed
+      setShowWelcomeModal(false)
     }
-    setShowWelcomeModal(false)
   }
 
-  // NEW LOGIC: Live event handlers
+  // Live event handlers
   const handleLiveEventHide = () => setLiveEventPosition('hidden')
   const handleSectionRemove = (id: SectionId) => toggleSection(id)
 
@@ -152,7 +169,7 @@ export default function Dashboard() {
       </div>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex gap-6">
-        {/* Favorite Fighters Sidebar (NEW: position + visibility controlled by prefs) */}
+        {/* Favorite Fighters Sidebar (position + visibility controlled by prefs) */}
         {preferences.layoutPreferences.favoriteFighters.visible && (
           <aside
             className={`w-72 shrink-0 ${
@@ -161,7 +178,7 @@ export default function Dashboard() {
                 : 'order-2'
             }`}
           >
-            {selectedFighters.length > 0 && !showWelcomeModal && (
+            {selectedFighters.length > 0 && (
               <div className="bg-white dark:bg-gray-800/50 rounded-lg p-4 shadow-lg">
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-base font-semibold text-gray-900 dark:text-white">
@@ -208,7 +225,7 @@ export default function Dashboard() {
               : 'order-1'
           }`}
         >
-          {/* NEW: Top live event (if enabled + positioned at top) */}
+          {/* Top live event (if enabled + positioned at top) */}
           {showLiveEvent && liveEventPosition === 'top' && (
             <section className="mb-6 bg-white dark:bg-gray-800/70 rounded-lg p-4 shadow-lg">
               <div className="flex items-center justify-between mb-2">
@@ -243,7 +260,7 @@ export default function Dashboard() {
             </section>
           )}
 
-          {/* NEW: Dashboard grid (sections) */}
+          {/* Dashboard grid (sections) */}
           <section>
             <div
               className="grid"
@@ -282,7 +299,7 @@ export default function Dashboard() {
             </div>
           </section>
 
-          {/* NEW: Bottom live event (if enabled + positioned at bottom) */}
+          {/* Bottom live event (if enabled + positioned at bottom) */}
           {showLiveEvent && liveEventPosition === 'bottom' && (
             <section className="mt-6 bg-white dark:bg-gray-800/70 rounded-lg p-4 shadow-lg">
               <div className="flex items-center justify-between mb-2">
@@ -319,7 +336,7 @@ export default function Dashboard() {
         </section>
       </main>
 
-      {/* OLD LOGIC: Existing fighter onboarding modal flow stays intact */}
+      {/* Existing fighter onboarding modal flow stays intact */}
       {showWelcomeModal && (
         <FighterSelectModal
           initialSelectedFighters={selectedFighters}
