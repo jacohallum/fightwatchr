@@ -58,16 +58,19 @@ function sanitizeLayoutPreferences(
 }
 
 export function validatePreferences(prefs: UserPreferences): UserPreferences {
+  // Get valid section IDs from the objects array
+  const validSectionIds = AVAILABLE_SECTIONS.map(s => s.id)
+  
   // Filter invalid section ids
   const enabled: SectionId[] = prefs.enabledSections.filter(id =>
-    AVAILABLE_SECTIONS.includes(id)
+    validSectionIds.includes(id)  // ← Changed from AVAILABLE_SECTIONS.includes(id)
   )
-
+  
   // sectionOrder must only contain enabled sections
   const sectionOrder: SectionId[] = prefs.sectionOrder.filter(id =>
     enabled.includes(id)
   )
-
+  
   return {
     ...prefs,
     enabledSections: enabled,
